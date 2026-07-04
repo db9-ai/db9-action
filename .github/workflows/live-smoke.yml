@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   anonymous-database:
-    name: Anonymous database
+    name: Local action anonymous database
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -23,6 +23,28 @@ jobs:
 
       - name: Check PostgreSQL connection
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select 1 as db9_action_smoke"
+
+      - name: Show database metadata
+        run: |
+          echo "database-id=${{ steps.db9.outputs.database-id }}"
+          echo "database-name=${{ steps.db9.outputs.database-name }}"
+          echo "database-state=${{ steps.db9.outputs.database-state }}"
+          echo "expires-at=${{ steps.db9.outputs.expires-at }}"
+
+  published-action:
+    name: Published action anonymous database
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Create DB9 database through published action
+        id: db9
+        uses: db9-ai/db9-action@v1
+        with:
+          database-name-prefix: smoke-published
+
+      - name: Check PostgreSQL connection
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select 1 as db9_action_published_smoke"
 
       - name: Show database metadata
         run: |
