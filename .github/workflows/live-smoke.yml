@@ -1,0 +1,32 @@
+name: Live Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  anonymous-database:
+    name: Anonymous database
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create DB9 database
+        id: db9
+        uses: ./
+        with:
+          database-name-prefix: smoke
+
+      - name: Check PostgreSQL connection
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select 1 as db9_action_smoke"
+
+      - name: Show database metadata
+        run: |
+          echo "database-id=${{ steps.db9.outputs.database-id }}"
+          echo "database-name=${{ steps.db9.outputs.database-name }}"
+          echo "database-state=${{ steps.db9.outputs.database-state }}"
+          echo "expires-at=${{ steps.db9.outputs.expires-at }}"
