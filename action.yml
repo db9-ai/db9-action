@@ -1,0 +1,64 @@
+name: DB9 Action
+description: Create temporary DB9 databases for GitHub Actions.
+author: DB9
+
+branding:
+  icon: database
+  color: blue
+
+inputs:
+  database-name:
+    description: Name for the DB9 database. Defaults to a generated name based on the workflow run.
+    required: false
+  region:
+    description: DB9 region to create the database in.
+    required: false
+  project-id:
+    description: DB9 project ID to create the database in.
+    required: false
+  database-user:
+    description: Database user to request in the temporary connection URL.
+    required: false
+    default: admin
+  db9-api-key:
+    description: DB9 API key. Omit this input to use anonymous DB9 provisioning.
+    required: false
+  db9-api-url:
+    description: DB9 API base URL. Defaults to the DB9 CLI default.
+    required: false
+  install-cli:
+    description: Install the DB9 CLI before creating the database.
+    required: false
+    default: "true"
+  install-url:
+    description: DB9 CLI installer URL.
+    required: false
+    default: https://db9.ai/install
+  cleanup:
+    description: Delete the created database in the action post step.
+    required: false
+    default: "true"
+  export-env:
+    description: Export DATABASE_URL, DB9_DATABASE_URL, and DB9_DATABASE for later steps.
+    required: false
+    default: "true"
+  isolate-credentials:
+    description: Use an isolated HOME directory for DB9 CLI credentials.
+    required: false
+    default: "true"
+
+outputs:
+  database-url:
+    description: Temporary PostgreSQL connection URL for the created DB9 database.
+  database-name:
+    description: Name of the created DB9 database.
+  database-id:
+    description: ID of the created DB9 database, when returned by the DB9 CLI.
+  database-user:
+    description: Database user used for the temporary connection URL.
+
+runs:
+  using: "node24"
+  main: "dist/index.js"
+  post: "dist/cleanup.js"
+  post-if: "always()"

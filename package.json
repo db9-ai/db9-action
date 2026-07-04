@@ -1,0 +1,14 @@
+{
+  "name": "db9-action",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Create temporary DB9 databases for GitHub Actions.",
+  "scripts": {
+    "check": "node --check dist/*.js test/*.js scripts/*.js && node scripts/check-action-yml.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
