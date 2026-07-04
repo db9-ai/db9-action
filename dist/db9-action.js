@@ -1,12 +1,20 @@
 "use strict";
 
 const crypto = require("crypto");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawnSync } = require("child_process");
 
 const github = require("./github");
+
+const DEFAULT_API_URL = "https://api.db9.ai";
+const ACTION_VERSION = "1";
+
+class Db9ApiError extends Error {
+  constructor(message, status, body) {
+    super(message);
+    this.name = "Db9ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
 
 function sanitizeDatabaseName(value, fallback = "gha-db9") {
   const cleaned = String(value || "")
@@ -30,28 +38,24 @@ function generateDatabaseName(env = process.env) {
   return sanitizeDatabaseName(`${sanitized}-${crypto.randomBytes(3).toString("hex")}`);
 }
 
-function parseDatabaseUrlFromEnv(stdout) {
-  const lines = String(stdout || "").split(/\r?\n/);
-  for (const line of lines) {
-    const match = line.match(/^DATABASE_URL=(.+)$/);
-    if (match) {
-      return match[1].trim();
-    }
-  }
-  throw new Error("Could not find DATABASE_URL in db9 connect output");
+function encodeUriComponentStrict(value) {
+  return encodeURIComponent(String(value)).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }
 
-function parseJsonObject(stdout, label) {
-  const text = String(stdout || "").trim();
-  if (!text) {
-    return {};
+function buildTemporaryConnectionString(info) {
+  for (const key of ["user", "token", "host"]) {
+    if (!info[key] || typeof info[key] !== "string") {
+      throw new Error(`Invalid DB9 connect-token response: missing ${key}`);
+    }
   }
-  try {
-    const parsed = JSON.parse(text);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch (error) {
-    throw new Error(`Could not parse ${label} JSON: ${error.message}`);
+  const port = Number(info.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Invalid DB9 connect-token response: missing or invalid port");
   }
+  const database = typeof info.database === "string" && info.database ? info.database : "postgres";
+  return `postgresql://${encodeUriComponentStrict(info.user)}:${encodeUriComponentStrict(info.token)}@${info.host}:${port}/${encodeUriComponentStrict(database)}`;
 }
 
 function readInputs() {
@@ -61,123 +65,123 @@ function readInputs() {
   }
   return {
     apiKey,
-    apiUrl: github.getInput("db9-api-url"),
+    apiUrl: github.getInput("db9-api-url") || DEFAULT_API_URL,
     cleanup: github.getBooleanInput("cleanup", true),
     databaseName: github.getInput("database-name"),
     databaseUser: github.getInput("database-user") || "admin",
     exportEnv: github.getBooleanInput("export-env", true),
-    installCli: github.getBooleanInput("install-cli", true),
-    installUrl: github.getInput("install-url") || "https://db9.ai/install",
-    isolateCredentials: github.getBooleanInput("isolate-credentials", true),
     projectId: github.getInput("project-id"),
     region: github.getInput("region"),
   };
 }
 
-function commandExists(command, env = process.env) {
-  const checker = process.platform === "win32" ? "where" : "command";
-  const args = process.platform === "win32" ? [command] : ["-v", command];
-  const result = spawnSync(checker, args, {
-    encoding: "utf8",
-    env,
-    shell: process.platform !== "win32",
-  });
-  return result.status === 0;
+function apiUrl(baseUrl, requestPath) {
+  return `${baseUrl.replace(/\/+$/g, "")}/${requestPath.replace(/^\/+/g, "")}`;
 }
 
-function runCommand(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd || process.cwd(),
-    encoding: "utf8",
-    env: options.env || process.env,
-    shell: options.shell || false,
-    windowsHide: true,
-  });
-  if (result.error) {
-    throw result.error;
+async function readResponseBody(response) {
+  const text = await response.text();
+  if (!text) {
+    return {};
   }
-  const stdout = result.stdout || "";
-  const stderr = result.stderr || "";
-  if (result.status !== 0) {
-    const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
-    throw new Error(`${command} ${args.join(" ")} failed with exit code ${result.status}${detail ? `:\n${detail}` : ""}`);
-  }
-  return { stdout, stderr };
-}
-
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-function ensureDb9Cli(inputs, runtime) {
-  if (!inputs.installCli) {
-    if (!commandExists("db9")) {
-      throw new Error("db9 CLI was not found on PATH and install-cli is false");
-    }
-    return "";
-  }
-
-  ensureDir(runtime.installDir);
-  github.startGroup("Install DB9 CLI");
   try {
-    runCommand(
-      "sh",
-      ["-c", 'curl -fsSL "$DB9_INSTALL_URL" | sh'],
-      {
-        env: {
-          ...process.env,
-          DB9_INSTALL_DIR: runtime.installDir,
-          DB9_INSTALL_URL: inputs.installUrl,
-        },
+    return JSON.parse(text);
+  } catch (_error) {
+    return { message: text };
+  }
+}
+
+async function requestJson(method, baseUrl, requestPath, options = {}) {
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "User-Agent": `db9-action/${ACTION_VERSION}`,
+    "X-DB9-Action": "db9-action",
+    "X-DB9-Action-Version": ACTION_VERSION,
+    ...(options.headers || {}),
+  };
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
+
+  const response = await (options.fetchImpl || fetch)(apiUrl(baseUrl, requestPath), {
+    method,
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const body = await readResponseBody(response);
+  if (!response.ok) {
+    const detail = body.message || body.error || body.detail || response.statusText;
+    throw new Db9ApiError(`DB9 API ${method} ${requestPath} failed (${response.status}): ${detail}`, response.status, body);
+  }
+  return body;
+}
+
+async function getAccess(inputs, options = {}) {
+  if (inputs.apiKey) {
+    return { token: inputs.apiKey, anonymous: null };
+  }
+
+  github.startGroup("Register anonymous DB9 account");
+  try {
+    const body = await requestJson("POST", inputs.apiUrl, "/customer/anonymous-register", {
+      body: {},
+      fetchImpl: options.fetchImpl,
+    });
+    if (!body.token || typeof body.token !== "string") {
+      throw new Error("DB9 anonymous-register response is missing token");
+    }
+    github.setSecret(body.token);
+    if (body.anonymous_secret) {
+      github.setSecret(body.anonymous_secret);
+    }
+    return {
+      token: body.token,
+      anonymous: {
+        id: typeof body.anonymous_id === "string" ? body.anonymous_id : "",
+        secret: typeof body.anonymous_secret === "string" ? body.anonymous_secret : "",
       },
-    );
-    github.addPath(runtime.installDir);
-    return path.join(runtime.installDir, process.platform === "win32" ? "db9.exe" : "db9");
+    };
   } finally {
     github.endGroup();
   }
 }
 
-function buildRuntime(inputs) {
-  const runnerTemp = process.env.RUNNER_TEMP || os.tmpdir();
-  const root = fs.mkdtempSync(path.join(runnerTemp, "db9-action-"));
-  const home = inputs.isolateCredentials ? path.join(root, "home") : (process.env.HOME || os.homedir());
-  const installDir = path.join(root, "bin");
-  ensureDir(home);
-  return { home, installDir, root };
+async function refreshAnonymousAccess(inputs, anonymous, options = {}) {
+  if (!anonymous || !anonymous.id || !anonymous.secret) {
+    return "";
+  }
+  const body = await requestJson("POST", inputs.apiUrl, "/customer/anonymous-refresh", {
+    body: {
+      anonymous_id: anonymous.id,
+      anonymous_secret: anonymous.secret,
+    },
+    fetchImpl: options.fetchImpl,
+  });
+  if (!body.token || typeof body.token !== "string") {
+    throw new Error("DB9 anonymous-refresh response is missing token");
+  }
+  github.setSecret(body.token);
+  return body.token;
 }
 
-function buildDb9Env(inputs, runtime) {
-  const env = {
-    ...process.env,
-    HOME: runtime.home,
-  };
-  if (inputs.apiKey) {
-    env.DB9_API_KEY = inputs.apiKey;
-  }
-  if (inputs.apiUrl) {
-    env.DB9_API_URL = inputs.apiUrl;
-  }
-  if (runtime.installDir) {
-    env.PATH = `${runtime.installDir}${path.delimiter}${env.PATH || ""}`;
-  }
-  return env;
-}
-
-function createDatabase(inputs, runtime) {
+async function createDatabase(inputs, access, options = {}) {
   const name = inputs.databaseName ? sanitizeDatabaseName(inputs.databaseName) : generateDatabaseName();
-  const args = ["--json", "create", "--name", name];
+  const body = { name };
   if (inputs.region) {
-    args.push("--region", inputs.region);
+    body.region = inputs.region;
   }
   if (inputs.projectId) {
-    args.push("--project", inputs.projectId);
+    body.project_id = inputs.projectId;
   }
 
   github.startGroup("Create DB9 database");
   try {
-    const result = runCommand("db9", args, { env: buildDb9Env(inputs, runtime) });
-    const data = parseJsonObject(result.stdout, "db9 create");
+    const data = await requestJson("POST", inputs.apiUrl, "/customer/databases", {
+      token: access.token,
+      body,
+      fetchImpl: options.fetchImpl,
+    });
     return {
       id: typeof data.id === "string" ? data.id : "",
       name: typeof data.name === "string" && data.name ? data.name : name,
@@ -187,48 +191,68 @@ function createDatabase(inputs, runtime) {
   }
 }
 
-function connectDatabase(inputs, runtime, database) {
+async function connectDatabase(inputs, access, database, options = {}) {
   const target = database.id || database.name;
-  const args = ["db", "connect", target, "--env"];
+  const body = {};
   if (inputs.databaseUser) {
-    args.push("--user", inputs.databaseUser);
+    body.role = inputs.databaseUser;
   }
+
   github.startGroup("Fetch DB9 connection URL");
   try {
-    const result = runCommand("db9", args, { env: buildDb9Env(inputs, runtime) });
-    const databaseUrl = parseDatabaseUrlFromEnv(result.stdout);
+    const data = await requestJson("POST", inputs.apiUrl, `/customer/databases/${encodeURIComponent(target)}/connect-token`, {
+      token: access.token,
+      body,
+      fetchImpl: options.fetchImpl,
+    });
+    const databaseUrl = buildTemporaryConnectionString(data);
     github.setSecret(databaseUrl);
-    return databaseUrl;
+    return {
+      databaseUrl,
+      user: typeof data.user === "string" ? data.user : inputs.databaseUser,
+      expiresAt: typeof data.expires_at === "string" ? data.expires_at : "",
+      expiresInSeconds: Number.isInteger(data.expires_in_seconds) ? data.expires_in_seconds : "",
+    };
   } finally {
     github.endGroup();
   }
 }
 
-function writeOutputs(inputs, database, databaseUrl) {
-  github.setOutput("database-url", databaseUrl);
+function writeOutputs(inputs, database, connection) {
+  github.setOutput("database-url", connection.databaseUrl);
   github.setOutput("database-name", database.name);
   github.setOutput("database-id", database.id);
-  github.setOutput("database-user", inputs.databaseUser);
+  github.setOutput("database-user", connection.user);
+  github.setOutput("expires-at", connection.expiresAt);
 
   if (inputs.exportEnv) {
-    github.exportVariable("DATABASE_URL", databaseUrl);
-    github.exportVariable("DB9_DATABASE_URL", databaseUrl);
+    github.exportVariable("DATABASE_URL", connection.databaseUrl);
+    github.exportVariable("DB9_DATABASE_URL", connection.databaseUrl);
     github.exportVariable("DB9_DATABASE", database.name);
   }
 }
 
-function saveCleanupState(inputs, runtime, database) {
+function saveCleanupState(inputs, access, database) {
   github.saveState("created", "true");
   github.saveState("cleanup", String(inputs.cleanup));
   github.saveState("database-name", database.name);
   github.saveState("database-id", database.id);
-  github.saveState("database-user", inputs.databaseUser);
-  github.saveState("db9-home", runtime.home);
-  github.saveState("install-dir", runtime.installDir);
   github.saveState("api-url", inputs.apiUrl);
+  github.saveState("access-token", access.token);
+  if (access.anonymous) {
+    github.saveState("anonymous-id", access.anonymous.id);
+    github.saveState("anonymous-secret", access.anonymous.secret);
+  }
 }
 
-function cleanupDatabase() {
+async function deleteDatabase(inputs, token, target, options = {}) {
+  return requestJson("DELETE", inputs.apiUrl, `/customer/databases/${encodeURIComponent(target)}`, {
+    token,
+    fetchImpl: options.fetchImpl,
+  });
+}
+
+async function cleanupDatabase(options = {}) {
   const cleanup = github.getState("cleanup");
   const created = github.getState("created");
   if (created !== "true" || cleanup !== "true") {
@@ -240,13 +264,9 @@ function cleanupDatabase() {
   if (apiKey) {
     github.setSecret(apiKey);
   }
-  const runtime = {
-    home: github.getState("db9-home") || process.env.HOME || os.homedir(),
-    installDir: github.getState("install-dir"),
-  };
   const inputs = {
     apiKey,
-    apiUrl: github.getState("api-url") || github.getInput("db9-api-url"),
+    apiUrl: github.getState("api-url") || github.getInput("db9-api-url") || DEFAULT_API_URL,
   };
   const target = github.getState("database-id") || github.getState("database-name");
   if (!target) {
@@ -254,38 +274,70 @@ function cleanupDatabase() {
     return;
   }
 
+  let token = apiKey || github.getState("access-token");
+  if (token) {
+    github.setSecret(token);
+  } else {
+    token = await refreshAnonymousAccess(
+      inputs,
+      {
+        id: github.getState("anonymous-id"),
+        secret: github.getState("anonymous-secret"),
+      },
+      options,
+    );
+  }
+
   github.startGroup("Delete DB9 database");
   try {
-    runCommand("db9", ["delete", target, "--yes"], { env: buildDb9Env(inputs, runtime) });
+    await deleteDatabase(inputs, token, target, options);
     github.info(`Deleted DB9 database ${target}.`);
   } catch (error) {
+    const anonymous = {
+      id: github.getState("anonymous-id"),
+      secret: github.getState("anonymous-secret"),
+    };
+    if (!apiKey && error.status === 401 && anonymous.id && anonymous.secret) {
+      try {
+        github.warning("DB9 cleanup token expired; refreshing anonymous token and retrying.");
+        const refreshedToken = await refreshAnonymousAccess(inputs, anonymous, options);
+        await deleteDatabase(inputs, refreshedToken, target, options);
+        github.info(`Deleted DB9 database ${target}.`);
+        return;
+      } catch (retryError) {
+        github.warning(`DB9 cleanup retry failed: ${retryError.message}`);
+        return;
+      }
+    }
     github.warning(`DB9 cleanup failed: ${error.message}`);
   } finally {
     github.endGroup();
   }
 }
 
-function runMain() {
+async function runMain(options = {}) {
   const inputs = readInputs();
-  const runtime = buildRuntime(inputs);
-  ensureDb9Cli(inputs, runtime);
-  const database = createDatabase(inputs, runtime);
-  saveCleanupState(inputs, runtime, database);
-  const databaseUrl = connectDatabase(inputs, runtime, database);
-  writeOutputs(inputs, database, databaseUrl);
+  const access = await getAccess(inputs, options);
+  const database = await createDatabase(inputs, access, options);
+  saveCleanupState(inputs, access, database);
+  const connection = await connectDatabase(inputs, access, database, options);
+  writeOutputs(inputs, database, connection);
   github.info(`Created DB9 database ${database.name}.`);
 }
 
 module.exports = {
-  buildDb9Env,
-  buildRuntime,
+  apiUrl,
+  buildTemporaryConnectionString,
   cleanupDatabase,
   connectDatabase,
   createDatabase,
+  deleteDatabase,
+  Db9ApiError,
+  encodeUriComponentStrict,
   generateDatabaseName,
-  parseDatabaseUrlFromEnv,
-  parseJsonObject,
+  getAccess,
   readInputs,
+  requestJson,
   runMain,
   sanitizeDatabaseName,
 };

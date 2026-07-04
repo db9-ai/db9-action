@@ -3,8 +3,4 @@
 const github = require("./github");
 const { runMain } = require("./db9-action");
 
-try {
-  runMain();
-} catch (error) {
-  github.setFailed(error);
-}
+runMain().catch((error) => github.setFailed(error));

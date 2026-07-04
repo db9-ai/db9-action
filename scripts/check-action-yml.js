@@ -11,6 +11,7 @@ const required = [
   'main: "dist/index.js"',
   'post: "dist/cleanup.js"',
   "database-url:",
+  "expires-at:",
 ];
 
 const missing = required.filter((needle) => !text.includes(needle));

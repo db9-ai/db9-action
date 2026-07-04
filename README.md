@@ -2,9 +2,9 @@
 
 Create temporary DB9 databases for GitHub Actions.
 
-This action installs the DB9 CLI, creates a DB9 database, exports a temporary
-PostgreSQL connection URL, and deletes the database in the post step by default.
-If `db9-api-key` is omitted, the DB9 CLI uses anonymous provisioning.
+This action calls the DB9 API directly, creates a DB9 database, exports a
+temporary PostgreSQL connection URL, and deletes the database in the post step by
+default. If `db9-api-key` is omitted, the action uses anonymous provisioning.
 
 ## Usage
 
@@ -57,12 +57,9 @@ account or project, pass an API key:
 | `project-id` | DB9 default | DB9 project ID to create the database in. |
 | `database-user` | `admin` | Database user to request in the temporary connection URL. |
 | `db9-api-key` | unset | DB9 API key. Omit for anonymous provisioning. |
-| `db9-api-url` | DB9 CLI default | DB9 API base URL. |
-| `install-cli` | `true` | Install the DB9 CLI before creating the database. |
-| `install-url` | `https://db9.ai/install` | DB9 CLI installer URL. |
+| `db9-api-url` | `https://api.db9.ai` | DB9 API base URL. |
 | `cleanup` | `true` | Delete the created database in the post step. |
 | `export-env` | `true` | Export `DATABASE_URL`, `DB9_DATABASE_URL`, and `DB9_DATABASE`. |
-| `isolate-credentials` | `true` | Use an isolated `HOME` directory for DB9 CLI credentials. |
 
 ## Outputs
 
@@ -70,16 +67,15 @@ account or project, pass an API key:
 | --- | --- |
 | `database-url` | Temporary PostgreSQL connection URL for the created DB9 database. |
 | `database-name` | Name of the created DB9 database. |
-| `database-id` | ID of the created DB9 database, when returned by the DB9 CLI. |
+| `database-id` | ID of the created DB9 database, when returned by the DB9 API. |
 | `database-user` | Database user used for the temporary connection URL. |
+| `expires-at` | Expiration timestamp for the temporary connection URL, when returned by the DB9 API. |
 
 ## Cleanup
 
 Cleanup is enabled by default. The action records the created database and runs:
 
-```sh
-db9 delete <database> --yes
-```
+`DELETE /customer/databases/<database-id>`
 
 in the post step. Set `cleanup: false` only when you intentionally want to keep
 the database after the workflow finishes.
@@ -87,7 +83,7 @@ the database after the workflow finishes.
 ## Security notes
 
 - The action masks `db9-api-key` and the generated `database-url` in workflow logs.
-- Anonymous mode uses an isolated temporary `HOME` by default so credentials do
-  not leak into other workflow steps.
+- Anonymous mode stores its temporary API token only in GitHub Actions state so
+  the post step can delete the database.
 - The exported connection URL is temporary. Prefer passing it through GitHub
   Actions environment variables or outputs instead of printing it.

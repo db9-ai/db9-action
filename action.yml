@@ -24,26 +24,14 @@ inputs:
     description: DB9 API key. Omit this input to use anonymous DB9 provisioning.
     required: false
   db9-api-url:
-    description: DB9 API base URL. Defaults to the DB9 CLI default.
+    description: DB9 API base URL.
     required: false
-  install-cli:
-    description: Install the DB9 CLI before creating the database.
-    required: false
-    default: "true"
-  install-url:
-    description: DB9 CLI installer URL.
-    required: false
-    default: https://db9.ai/install
   cleanup:
     description: Delete the created database in the action post step.
     required: false
     default: "true"
   export-env:
     description: Export DATABASE_URL, DB9_DATABASE_URL, and DB9_DATABASE for later steps.
-    required: false
-    default: "true"
-  isolate-credentials:
-    description: Use an isolated HOME directory for DB9 CLI credentials.
     required: false
     default: "true"
 
@@ -53,9 +41,11 @@ outputs:
   database-name:
     description: Name of the created DB9 database.
   database-id:
-    description: ID of the created DB9 database, when returned by the DB9 CLI.
+    description: ID of the created DB9 database, when returned by the DB9 API.
   database-user:
     description: Database user used for the temporary connection URL.
+  expires-at:
+    description: Expiration timestamp for the temporary connection URL, when returned by the DB9 API.
 
 runs:
   using: "node24"
