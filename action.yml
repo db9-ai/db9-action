@@ -7,8 +7,19 @@ branding:
   color: blue
 
 inputs:
+  mode:
+    description: Operation to run. Use database for an empty ephemeral database, branch to clone from an existing database, or cleanup to delete stale CI databases by prefix.
+    required: false
+    default: database
   database-name:
-    description: Name for the DB9 database. Defaults to a generated name based on the workflow run.
+    description: Name for the DB9 database or branch. Defaults to a generated name based on the workflow run.
+    required: false
+  database-name-prefix:
+    description: Prefix used when generating a database name.
+    required: false
+    default: gha
+  worker-id:
+    description: Optional worker or matrix identifier appended to generated database names.
     required: false
   region:
     description: DB9 region to create the database in.
@@ -20,6 +31,30 @@ inputs:
     description: Database user to request in the temporary connection URL.
     required: false
     default: admin
+  source-database-id:
+    description: Source DB9 database ID for branch mode.
+    required: false
+  source-database-name:
+    description: Source DB9 database name for branch mode. Used only when source-database-id is not set.
+    required: false
+  snapshot-at:
+    description: Optional RFC3339 timestamp for point-in-time branch mode.
+    required: false
+  wait:
+    description: Wait for the created database or branch to become ACTIVE before fetching the connection URL.
+    required: false
+    default: "true"
+  wait-timeout-seconds:
+    description: Maximum seconds to wait for a database or branch to become ACTIVE.
+    required: false
+    default: "120"
+  wait-interval-seconds:
+    description: Seconds between database status polls while waiting.
+    required: false
+    default: "2"
+  cleanup-prefix:
+    description: Database name prefix to delete in cleanup mode.
+    required: false
   db9-api-key:
     description: DB9 API key. Omit this input to use anonymous DB9 provisioning.
     required: false
@@ -37,15 +72,19 @@ inputs:
 
 outputs:
   database-url:
-    description: Temporary PostgreSQL connection URL for the created DB9 database.
+    description: Temporary PostgreSQL connection URL for the created DB9 database or branch.
   database-name:
-    description: Name of the created DB9 database.
+    description: Name of the created DB9 database or branch.
   database-id:
-    description: ID of the created DB9 database, when returned by the DB9 API.
+    description: ID of the created DB9 database or branch, when returned by the DB9 API.
   database-user:
     description: Database user used for the temporary connection URL.
   expires-at:
     description: Expiration timestamp for the temporary connection URL, when returned by the DB9 API.
+  database-state:
+    description: Final state observed for the created DB9 database or branch.
+  cleanup-count:
+    description: Number of databases deleted in cleanup mode.
 
 runs:
   using: "node24"

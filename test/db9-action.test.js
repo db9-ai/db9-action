@@ -19,16 +19,24 @@ const {
 function mockFetch(routes, calls = []) {
   return async (url, options = {}) => {
     const parsed = new URL(url);
-    const key = `${options.method || "GET"} ${parsed.pathname}`;
-    calls.push({
+    const key = `${options.method || "GET"} ${parsed.pathname}${parsed.search}`;
+    const keyWithoutSearch = `${options.method || "GET"} ${parsed.pathname}`;
+    const call = {
       key,
       url,
       body: options.body ? JSON.parse(options.body) : undefined,
       headers: options.headers || {},
-    });
-    const route = routes[key];
+    };
+    calls.push(call);
+    let route = routes[key] || routes[keyWithoutSearch];
     if (!route) {
       return new Response(JSON.stringify({ message: `unexpected route: ${key}` }), { status: 404 });
+    }
+    if (Array.isArray(route)) {
+      route = route.length > 1 ? route.shift() : route[0];
+    }
+    if (typeof route === "function") {
+      route = route(call);
     }
     return new Response(JSON.stringify(route.body || {}), {
       status: route.status || 200,
@@ -67,6 +75,18 @@ test("generateDatabaseName uses GitHub run context", () => {
     GITHUB_RUN_ATTEMPT: "2",
   });
   assert.equal(name, "gha-example-app-12345-2");
+});
+
+test("generateDatabaseName supports prefixes and worker IDs", () => {
+  const name = generateDatabaseName(
+    {
+      GITHUB_REPOSITORY: "db9-ai/example-app",
+      GITHUB_RUN_ID: "12345",
+      GITHUB_RUN_ATTEMPT: "2",
+    },
+    { prefix: "ci", workerId: "node-24" },
+  );
+  assert.equal(name, "ci-example-app-12345-2-node-24");
 });
 
 test("apiUrl joins base URL and path", () => {
@@ -189,6 +209,136 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
       "POST /customer/databases/db_123/connect-token",
     ]);
     assert.equal(calls[0].headers.Authorization, "Bearer api-key");
+  });
+});
+
+test("runMain creates a branch and waits until ACTIVE", async () => {
+  await withGithubFiles(async () => {
+    process.env["INPUT_DB9-API-KEY"] = "api-key";
+    process.env.INPUT_MODE = "branch";
+    process.env["INPUT_SOURCE-DATABASE-ID"] = "db_source";
+    process.env["INPUT_DATABASE-NAME"] = "ci-branch";
+
+    const calls = [];
+    const fetchImpl = mockFetch(
+      {
+        "POST /customer/databases/db_source/branch": {
+          status: 201,
+          body: {
+            id: "db_branch",
+            name: "ci-branch",
+            state: "CLONING",
+            parent_database_id: "db_source",
+          },
+        },
+        "GET /customer/databases/db_branch": {
+          status: 200,
+          body: { id: "db_branch", name: "ci-branch", state: "ACTIVE" },
+        },
+        "POST /customer/databases/db_branch/connect-token": {
+          status: 201,
+          body: {
+            user: "db_branch.admin",
+            token: "connect-token",
+            host: "pg.db9.ai",
+            port: 5433,
+            database: "postgres",
+          },
+        },
+      },
+      calls,
+    );
+
+    await runMain({ fetchImpl, pollIntervalMs: 1 });
+
+    assert.deepEqual(calls.map((call) => call.key), [
+      "POST /customer/databases/db_source/branch",
+      "GET /customer/databases/db_branch",
+      "POST /customer/databases/db_branch/connect-token",
+    ]);
+    assert.deepEqual(calls[0].body, { name: "ci-branch" });
+
+    const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8");
+    assert.match(output, /database-id=db_branch/);
+    assert.match(output, /database-state=ACTIVE/);
+  });
+});
+
+test("runMain resolves branch source by database name", async () => {
+  await withGithubFiles(async () => {
+    process.env["INPUT_DB9-API-KEY"] = "api-key";
+    process.env.INPUT_MODE = "branch";
+    process.env["INPUT_SOURCE-DATABASE-NAME"] = "staging";
+    process.env["INPUT_DATABASE-NAME"] = "ci-branch";
+    process.env.INPUT_WAIT = "false";
+
+    const calls = [];
+    const fetchImpl = mockFetch(
+      {
+        "GET /customer/databases?all=true": {
+          status: 200,
+          body: [{ id: "db_source", name: "staging", state: "ACTIVE" }],
+        },
+        "POST /customer/databases/db_source/branch": {
+          status: 201,
+          body: { id: "db_branch", name: "ci-branch", state: "CLONING" },
+        },
+        "POST /customer/databases/db_branch/connect-token": {
+          status: 201,
+          body: {
+            user: "db_branch.admin",
+            token: "connect-token",
+            host: "pg.db9.ai",
+            port: 5433,
+            database: "postgres",
+          },
+        },
+      },
+      calls,
+    );
+
+    await runMain({ fetchImpl });
+
+    assert.deepEqual(calls.map((call) => call.key), [
+      "GET /customer/databases?all=true",
+      "POST /customer/databases/db_source/branch",
+      "POST /customer/databases/db_branch/connect-token",
+    ]);
+  });
+});
+
+test("runMain cleanup mode deletes databases by prefix", async () => {
+  await withGithubFiles(async () => {
+    process.env["INPUT_DB9-API-KEY"] = "api-key";
+    process.env.INPUT_MODE = "cleanup";
+    process.env["INPUT_CLEANUP-PREFIX"] = "ci-";
+
+    const calls = [];
+    const fetchImpl = mockFetch(
+      {
+        "GET /customer/databases?all=true": {
+          status: 200,
+          body: [
+            { id: "db_1", name: "ci-123" },
+            { id: "db_2", name: "keep-me" },
+            { id: "db_3", name: "ci-456" },
+          ],
+        },
+        "DELETE /customer/databases/db_1": { status: 200, body: {} },
+        "DELETE /customer/databases/db_3": { status: 200, body: {} },
+      },
+      calls,
+    );
+
+    await runMain({ fetchImpl });
+
+    assert.deepEqual(calls.map((call) => call.key), [
+      "GET /customer/databases?all=true",
+      "DELETE /customer/databases/db_1",
+      "DELETE /customer/databases/db_3",
+    ]);
+    const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8");
+    assert.match(output, /cleanup-count=2/);
   });
 });
 
