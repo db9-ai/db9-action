@@ -471,12 +471,7 @@ function saveCleanupState(inputs, access, database) {
   };
   if (access.anonymous) {
     values["anonymous-id"] = access.anonymous.id;
-  }
-  for (const [name, value] of Object.entries(values)) {
-    github.saveState(name, value);
-  }
-  github.saveState("access-token", access.token);
-  if (access.anonymous) {
+    github.saveState("access-token", access.token);
     github.saveState("anonymous-secret", access.anonymous.secret);
   }
   const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
@@ -541,17 +536,20 @@ async function cleanupDatabase(options = {}) {
   if (apiKey) {
     github.setSecret(apiKey);
   }
-  const legacyToken = apiKey || github.getState("access-token");
-  const savedAnonymousSecret = github.getState("anonymous-secret");
+  const accessToken = apiKey || github.getState("access-token");
+  if (accessToken && !apiKey) {
+    github.setSecret(accessToken);
+  }
+  const savedAnonymousSecret = apiKey ? "" : github.getState("anonymous-secret");
   if (savedAnonymousSecret) {
     github.setSecret(savedAnonymousSecret);
   }
   let record;
   try {
-    if (!legacyToken) {
+    if (!accessToken) {
       throw new Error("DB9 cleanup credentials are missing");
     }
-    record = readCleanupRecord(legacyToken, apiKey ? "" : savedAnonymousSecret);
+    record = readCleanupRecord(accessToken, savedAnonymousSecret);
   } catch (error) {
     github.warning(`DB9 cleanup skipped: ${error.message}`);
     return;
@@ -572,8 +570,10 @@ async function cleanupDatabase(options = {}) {
     return;
   }
 
-  const token = legacyToken;
-  github.setSecret(token);
+  const token = accessToken;
+  if (!apiKey) {
+    github.setSecret(readCleanupState(record, "anonymous-id"));
+  }
 
   github.startGroup("Delete DB9 database");
   try {
