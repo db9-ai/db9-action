@@ -372,3 +372,71 @@ test("cleanupDatabase deletes the recorded database through the DB9 API", async 
     assert.equal(calls[0].headers.Authorization, "Bearer anon-token");
   });
 });
+
+test("cleanupDatabase uses the signed cleanup record instead of modified individual state", async () => {
+  await withGithubFiles(async () => {
+    process.env.STATE_created = "true";
+    process.env.STATE_cleanup = "true";
+    process.env["STATE_database-id"] = "db_forged";
+    process.env["STATE_api-url"] = "https://attacker.example.test";
+    process.env["STATE_access-token"] = "anon-token";
+
+    const values = {
+      created: "true",
+      cleanup: "true",
+      "database-name": "ci-db",
+      "database-id": "db_123",
+      "api-url": "https://api.db9.ai",
+      "access-token": "anon-token",
+    };
+    const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
+    const signature = require("node:crypto").createHmac("sha256", "anon-token").update(payload).digest("base64url");
+    process.env["STATE_cleanup-record"] = `${payload}.${signature}`;
+
+    const calls = [];
+    await cleanupDatabase({
+      fetchImpl: mockFetch(
+        {
+          "DELETE /customer/databases/db_123": {
+            status: 200,
+            body: { message: "Database disabled" },
+          },
+        },
+        calls,
+      ),
+    });
+
+    assert.deepEqual(calls.map((call) => call.key), ["DELETE /customer/databases/db_123"]);
+    assert.ok(calls.every((call) => new URL(call.url).origin === "https://api.db9.ai"));
+    assert.equal(calls[0].headers.Authorization, "Bearer anon-token");
+  });
+});
+
+test("cleanupDatabase rejects a cleanup record signed by a different token", async () => {
+  await withGithubFiles(async () => {
+    process.env.STATE_created = "true";
+    process.env.STATE_cleanup = "true";
+    process.env["STATE_database-id"] = "db_123";
+    process.env["STATE_api-url"] = "https://api.db9.ai";
+    process.env["STATE_access-token"] = "anon-token";
+
+    const values = {
+      created: "true",
+      cleanup: "true",
+      "database-name": "ci-db",
+      "database-id": "db_forged",
+      "api-url": "https://attacker.example.test",
+      "access-token": "other-token",
+    };
+    const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
+    const signature = require("node:crypto").createHmac("sha256", "other-token").update(payload).digest("base64url");
+    process.env["STATE_cleanup-record"] = `${payload}.${signature}`;
+
+    const calls = [];
+    await cleanupDatabase({
+      fetchImpl: mockFetch({}, calls),
+    });
+
+    assert.deepEqual(calls, []);
+  });
+});

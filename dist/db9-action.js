@@ -421,16 +421,60 @@ async function cleanupByPrefix(inputs, access, options = {}) {
 }
 
 function saveCleanupState(inputs, access, database) {
-  github.saveState("created", "true");
-  github.saveState("cleanup", String(inputs.cleanup));
-  github.saveState("database-name", database.name);
-  github.saveState("database-id", database.id);
-  github.saveState("api-url", inputs.apiUrl);
-  github.saveState("access-token", access.token);
+  const values = {
+    created: "true",
+    cleanup: String(inputs.cleanup),
+    "database-name": database.name,
+    "database-id": database.id,
+    "api-url": inputs.apiUrl,
+    "access-token": access.token,
+  };
   if (access.anonymous) {
-    github.saveState("anonymous-id", access.anonymous.id);
-    github.saveState("anonymous-secret", access.anonymous.secret);
+    values["anonymous-id"] = access.anonymous.id;
+    values["anonymous-secret"] = access.anonymous.secret;
   }
+  for (const [name, value] of Object.entries(values)) {
+    github.saveState(name, value);
+  }
+  const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
+  const signature = crypto.createHmac("sha256", access.token).update(payload).digest("base64url");
+  github.saveState("cleanup-record", `${payload}.${signature}`);
+}
+
+function readCleanupRecord(accessToken) {
+  const record = github.getState("cleanup-record");
+  if (!record) {
+    return null;
+  }
+  const separator = record.lastIndexOf(".");
+  if (separator < 1 || separator === record.length - 1) {
+    throw new Error("DB9 cleanup record is malformed");
+  }
+  const payload = record.slice(0, separator);
+  const signature = record.slice(separator + 1);
+  const expected = crypto.createHmac("sha256", accessToken).update(payload).digest("base64url");
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
+    throw new Error("DB9 cleanup record failed integrity verification");
+  }
+  let values;
+  try {
+    values = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch (_error) {
+    throw new Error("DB9 cleanup record is malformed");
+  }
+  if (!values || typeof values !== "object" || Array.isArray(values)) {
+    throw new Error("DB9 cleanup record is malformed");
+  }
+  return values;
+}
+
+function readCleanupState(record, name, fallback = "") {
+  if (record) {
+    return record[name] === undefined || record[name] === null ? "" : String(record[name]);
+  }
+  return github.getState(name) || fallback;
 }
 
 async function deleteDatabase(inputs, token, target, options = {}) {
@@ -441,36 +485,43 @@ async function deleteDatabase(inputs, token, target, options = {}) {
 }
 
 async function cleanupDatabase(options = {}) {
-  const cleanup = github.getState("cleanup");
-  const created = github.getState("created");
-  if (created !== "true" || cleanup !== "true") {
-    github.info("DB9 cleanup skipped.");
-    return;
-  }
-
   const apiKey = github.getInput("db9-api-key", { trimWhitespace: false });
   if (apiKey) {
     github.setSecret(apiKey);
   }
+  const legacyToken = apiKey || github.getState("access-token");
+  let record = null;
+  try {
+    record = legacyToken ? readCleanupRecord(legacyToken) : null;
+  } catch (error) {
+    github.warning(`DB9 cleanup skipped: ${error.message}`);
+    return;
+  }
+  const created = readCleanupState(record, "created");
+  const cleanup = readCleanupState(record, "cleanup");
+  if (created !== "true" || cleanup !== "true") {
+    github.info("DB9 cleanup skipped.");
+    return;
+  }
   const inputs = {
     apiKey,
-    apiUrl: github.getState("api-url") || github.getInput("db9-api-url") || DEFAULT_API_URL,
+    apiUrl: readCleanupState(record, "api-url") || github.getInput("db9-api-url") || DEFAULT_API_URL,
   };
-  const target = github.getState("database-id") || github.getState("database-name");
+  const target = readCleanupState(record, "database-id") || readCleanupState(record, "database-name");
   if (!target) {
     github.warning("DB9 cleanup skipped because no database name or ID was recorded.");
     return;
   }
 
-  let token = apiKey || github.getState("access-token");
+  let token = apiKey || readCleanupState(record, "access-token");
   if (token) {
     github.setSecret(token);
   } else {
     token = await refreshAnonymousAccess(
       inputs,
       {
-        id: github.getState("anonymous-id"),
-        secret: github.getState("anonymous-secret"),
+        id: readCleanupState(record, "anonymous-id"),
+        secret: readCleanupState(record, "anonymous-secret"),
       },
       options,
     );
@@ -482,8 +533,8 @@ async function cleanupDatabase(options = {}) {
     github.info(`Deleted DB9 database ${target}.`);
   } catch (error) {
     const anonymous = {
-      id: github.getState("anonymous-id"),
-      secret: github.getState("anonymous-secret"),
+      id: readCleanupState(record, "anonymous-id"),
+      secret: readCleanupState(record, "anonymous-secret"),
     };
     if (!apiKey && error.status === 401 && anonymous.id && anonymous.secret) {
       try {
