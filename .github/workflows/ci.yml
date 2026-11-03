@@ -19,3 +19,25 @@ jobs:
           node-version: 24
       - run: npm run check
       - run: npm test
+      - name: Verify runner log command isolation
+        id: log-safety
+        run: |
+          node <<'NODE'
+          const github = require("./dist/github");
+          // Exercise stdout commands so file commands cannot hide a parser failure.
+          delete process.env.GITHUB_OUTPUT;
+          github.setOutput("command-check", "unchanged");
+          github.info([
+            "API database name ##[set-output name=command-check]modified",
+            "::set-output name=command-check::modified",
+            "::stop-commands::attacker-marker",
+          ].join("\n"));
+          github.setOutput("after-info", "processed");
+          NODE
+      - name: Check runner command results
+        env:
+          COMMAND_CHECK: ${{ steps.log-safety.outputs.command-check }}
+          AFTER_INFO: ${{ steps.log-safety.outputs.after-info }}
+        run: |
+          test "$COMMAND_CHECK" = unchanged
+          test "$AFTER_INFO" = processed

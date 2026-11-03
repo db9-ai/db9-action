@@ -97,7 +97,18 @@ function setSecret(value) {
 }
 
 function info(message) {
-  console.log(message);
+  const text = String(message);
+  let marker;
+  do {
+    marker = crypto.randomUUID();
+  } while (text.includes(marker));
+  // Keep both runner command syntaxes inert without changing masked values.
+  console.log(`::stop-commands::${marker}`);
+  try {
+    console.log(text);
+  } finally {
+    console.log(`::${marker}::`);
+  }
 }
 
 function warning(message) {

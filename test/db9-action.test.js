@@ -116,7 +116,9 @@ test("requestJson reports API errors", async () => {
   );
 });
 
-test("runMain creates an anonymous database through the DB9 API", async () => {
+test("runMain creates an anonymous database through the DB9 API", async (t) => {
+  const logs = [];
+  t.mock.method(console, "log", (line) => logs.push(line));
   await withGithubFiles(async () => {
     process.env["INPUT_DATABASE-NAME"] = "ci-db";
     process.env.INPUT_CLEANUP = "true";
@@ -156,6 +158,9 @@ test("runMain creates an anonymous database through the DB9 API", async () => {
 
     await runMain({ fetchImpl });
 
+    assert.ok(logs.includes("::add-mask::sub_123"));
+    assert.ok(logs.includes("::add-mask::anon-token"));
+    assert.ok(logs.includes("::add-mask::anon-secret"));
     assert.deepEqual(calls.map((call) => call.key), [
       "POST /customer/anonymous-register",
       "POST /customer/databases",
