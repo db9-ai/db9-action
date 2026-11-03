@@ -60,13 +60,15 @@ Use branch mode when tests need a copy of an existing database.
   with:
     mode: branch
     db9-api-key: ${{ secrets.DB9_API_KEY }}
+    project-id: ${{ vars.DB9_PROJECT_ID }}
     source-database-name: staging
     database-name: ci-${{ github.run_id }}-${{ github.run_attempt }}
 ```
 
-Use `source-database-id` instead of `source-database-name` when you already know
-the DB9 database ID. Branch mode waits for the branch to become `ACTIVE` before
-fetching the connection URL.
+Branch mode requires `project-id`; the source database must belong to that
+project. Use `source-database-id` instead of `source-database-name` when you
+already know the DB9 database ID. Branch mode waits for the branch to become
+`ACTIVE` before fetching the connection URL.
 
 ### Parallel test workers
 
@@ -122,7 +124,7 @@ jobs:
 | `database-name-prefix` | `gha` | Prefix used when generating a database name. |
 | `worker-id` | unset | Optional worker or matrix identifier appended to generated database names. |
 | `region` | DB9 default | DB9 region to create the database in. |
-| `project-id` | DB9 default | DB9 project ID to create the database in. |
+| `project-id` | DB9 default | DB9 project ID. Required for branch mode, where the source must belong to the specified project. |
 | `database-user` | `admin` | Database user to request in the temporary connection URL. |
 | `source-database-id` | unset | Source DB9 database ID for `branch` mode. |
 | `source-database-name` | unset | Source DB9 database name for `branch` mode. Used only when `source-database-id` is not set. |

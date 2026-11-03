@@ -278,16 +278,22 @@ async function listDatabases(inputs, access, options = {}) {
 }
 
 async function resolveSourceDatabase(inputs, access, options = {}) {
-  if (inputs.sourceDatabaseId) {
-    return inputs.sourceDatabaseId;
+  if (!inputs.projectId) {
+    throw new Error("branch mode requires project-id");
   }
-  if (!inputs.sourceDatabaseName) {
+  if (!inputs.sourceDatabaseId && !inputs.sourceDatabaseName) {
     throw new Error("branch mode requires source-database-id or source-database-name");
   }
   const databases = await listDatabases(inputs, access, options);
-  const match = databases.find((database) => database && database.name === inputs.sourceDatabaseName);
+  const match = databases.find((database) =>
+    database &&
+    database.project_id === inputs.projectId &&
+    (inputs.sourceDatabaseId
+      ? database.id === inputs.sourceDatabaseId
+      : database.name === inputs.sourceDatabaseName),
+  );
   if (!match || typeof match.id !== "string" || !match.id) {
-    throw new Error(`Could not find DB9 source database named ${inputs.sourceDatabaseName}`);
+    throw new Error("Could not find DB9 source database in the specified project");
   }
   return match.id;
 }
@@ -577,6 +583,9 @@ async function cleanupDatabase(options = {}) {
 
 async function runMain(options = {}) {
   const inputs = readInputs();
+  if (inputs.mode === "branch" && !inputs.projectId) {
+    throw new Error("branch mode requires project-id");
+  }
   if (inputs.mode === "cleanup" && !inputs.apiKey) {
     throw new Error("cleanup mode requires db9-api-key");
   }
