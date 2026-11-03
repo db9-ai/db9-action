@@ -491,21 +491,23 @@ function saveCleanupState(inputs, access, database) {
 function readCleanupRecord(accessToken, anonymousSecret) {
   const record = github.getState("cleanup-record");
   if (!record) {
-    return null;
+    throw new Error("DB9 cleanup record is missing");
   }
-  const isV2 = record.startsWith("v2.");
-  const signed = isV2 ? record.slice(3) : record;
+  if (!record.startsWith("v2.")) {
+    throw new Error("DB9 cleanup record has an unsupported version");
+  }
+  const signed = record.slice(3);
   const separator = signed.lastIndexOf(".");
   if (separator < 1 || separator === signed.length - 1) {
     throw new Error("DB9 cleanup record is malformed");
   }
   const payload = signed.slice(0, separator);
   const signature = signed.slice(separator + 1);
-  const hmac = crypto.createHmac("sha256", accessToken).update(payload);
-  if (isV2) {
-    hmac.update("\0").update(anonymousSecret);
-  }
-  const expected = hmac.digest("base64url");
+  const expected = crypto.createHmac("sha256", accessToken)
+    .update(payload)
+    .update("\0")
+    .update(anonymousSecret)
+    .digest("base64url");
   const actualBuffer = Buffer.from(signature);
   const expectedBuffer = Buffer.from(expected);
   if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
@@ -523,11 +525,8 @@ function readCleanupRecord(accessToken, anonymousSecret) {
   return values;
 }
 
-function readCleanupState(record, name, fallback = "") {
-  if (record) {
-    return record[name] === undefined || record[name] === null ? "" : String(record[name]);
-  }
-  return github.getState(name) || fallback;
+function readCleanupState(record, name) {
+  return record[name] === undefined || record[name] === null ? "" : String(record[name]);
 }
 
 async function deleteDatabase(inputs, token, target, options = {}) {
@@ -547,9 +546,12 @@ async function cleanupDatabase(options = {}) {
   if (savedAnonymousSecret) {
     github.setSecret(savedAnonymousSecret);
   }
-  let record = null;
+  let record;
   try {
-    record = legacyToken ? readCleanupRecord(legacyToken, apiKey ? "" : savedAnonymousSecret) : null;
+    if (!legacyToken) {
+      throw new Error("DB9 cleanup credentials are missing");
+    }
+    record = readCleanupRecord(legacyToken, apiKey ? "" : savedAnonymousSecret);
   } catch (error) {
     github.warning(`DB9 cleanup skipped: ${error.message}`);
     return;
@@ -562,7 +564,7 @@ async function cleanupDatabase(options = {}) {
   }
   const inputs = {
     apiKey,
-    apiUrl: normalizeApiUrl(readCleanupState(record, "api-url") || github.getInput("db9-api-url")),
+    apiUrl: normalizeApiUrl(readCleanupState(record, "api-url")),
   };
   const target = readCleanupState(record, "database-id") || readCleanupState(record, "database-name");
   if (!target) {
@@ -570,19 +572,8 @@ async function cleanupDatabase(options = {}) {
     return;
   }
 
-  let token = legacyToken || readCleanupState(record, "access-token");
-  if (token) {
-    github.setSecret(token);
-  } else {
-    token = await refreshAnonymousAccess(
-      inputs,
-      {
-        id: readCleanupState(record, "anonymous-id"),
-        secret: savedAnonymousSecret || readCleanupState(record, "anonymous-secret"),
-      },
-      options,
-    );
-  }
+  const token = legacyToken;
+  github.setSecret(token);
 
   github.startGroup("Delete DB9 database");
   try {
@@ -591,7 +582,7 @@ async function cleanupDatabase(options = {}) {
   } catch (error) {
     const anonymous = {
       id: readCleanupState(record, "anonymous-id"),
-      secret: savedAnonymousSecret || readCleanupState(record, "anonymous-secret"),
+      secret: savedAnonymousSecret,
     };
     if (!apiKey && error.status === 401 && anonymous.id && anonymous.secret) {
       try {
