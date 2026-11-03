@@ -198,6 +198,9 @@ async function getAccess(inputs, options = {}) {
     if (body.anonymous_secret) {
       github.setSecret(body.anonymous_secret);
     }
+    if (body.anonymous_id) {
+      github.setSecret(body.anonymous_id);
+    }
     return {
       token: body.token,
       anonymous: {
