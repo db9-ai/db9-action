@@ -423,6 +423,9 @@ function writeOutputs(inputs, database, connection) {
 }
 
 async function cleanupByPrefix(inputs, access, options = {}) {
+  if (!inputs.projectId) {
+    throw new Error("cleanup mode requires project-id");
+  }
   const prefix = inputs.cleanupPrefix;
   const sanitizedPrefix = sanitizeDatabasePrefix(prefix);
   if (!sanitizedPrefix || sanitizedPrefix.length < 3) {
@@ -435,9 +438,17 @@ async function cleanupByPrefix(inputs, access, options = {}) {
   github.startGroup("Delete stale DB9 databases");
   try {
     const databases = await listDatabases(inputs, access, options);
-    const targets = databases.filter((database) => database && typeof database.name === "string" && database.name.startsWith(sanitizedPrefix));
+    const targets = databases.filter((database) =>
+      database &&
+      database.project_id === inputs.projectId &&
+      typeof database.name === "string" &&
+      database.name.startsWith(sanitizedPrefix),
+    );
+    if (targets.some((database) => typeof database.id !== "string" || !database.id)) {
+      throw new Error("DB9 cleanup target is missing a database ID");
+    }
     for (const database of targets) {
-      await deleteDatabase(inputs, access.token, database.id || database.name, options);
+      await deleteDatabase(inputs, access.token, database.id, options);
       github.info(`Deleted DB9 database ${database.name}.`);
     }
     github.setOutput("cleanup-count", String(targets.length));
@@ -585,6 +596,9 @@ async function runMain(options = {}) {
   const inputs = readInputs();
   if (inputs.mode === "branch" && !inputs.projectId) {
     throw new Error("branch mode requires project-id");
+  }
+  if (inputs.mode === "cleanup" && !inputs.projectId) {
+    throw new Error("cleanup mode requires project-id");
   }
   if (inputs.mode === "cleanup" && !inputs.apiKey) {
     throw new Error("cleanup mode requires db9-api-key");
