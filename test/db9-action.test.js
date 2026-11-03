@@ -120,6 +120,8 @@ test("runMain creates an anonymous database through the DB9 API", async () => {
   await withGithubFiles(async () => {
     process.env["INPUT_DATABASE-NAME"] = "ci-db";
     process.env.INPUT_CLEANUP = "true";
+    delete process.env["INPUT_DB9-API-URL"];
+    process.env.INPUT_DB9_API_URL = "https://unrelated.example.test";
 
     const calls = [];
     const fetchImpl = mockFetch(
@@ -159,6 +161,7 @@ test("runMain creates an anonymous database through the DB9 API", async () => {
       "POST /customer/databases",
       "POST /customer/databases/db_123/connect-token",
     ]);
+    assert.ok(calls.every((call) => new URL(call.url).origin === "https://api.db9.ai"));
     assert.equal(calls[1].headers.Authorization, "Bearer anon-token");
     assert.deepEqual(calls[1].body, { name: "ci-db" });
 
@@ -180,6 +183,7 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
   await withGithubFiles(async () => {
     process.env["INPUT_DB9-API-KEY"] = "api-key";
     process.env["INPUT_DATABASE-NAME"] = "ci-db";
+    process.env["INPUT_DB9-API-URL"] = "https://custom.example.test";
 
     const calls = [];
     const fetchImpl = mockFetch(
@@ -209,6 +213,7 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
       "POST /customer/databases/db_123/connect-token",
     ]);
     assert.equal(calls[0].headers.Authorization, "Bearer api-key");
+    assert.ok(calls.every((call) => new URL(call.url).origin === "https://custom.example.test"));
   });
 });
 

@@ -8,14 +8,8 @@ function envNameForInput(name) {
   return `INPUT_${name.replace(/ /g, "_").toUpperCase()}`;
 }
 
-function envNameForInputFallback(name) {
-  return `INPUT_${name.replace(/[ -]/g, "_").toUpperCase()}`;
-}
-
 function getInput(name, options = {}) {
-  const primary = envNameForInput(name);
-  const fallback = envNameForInputFallback(name);
-  const value = process.env[primary] ?? process.env[fallback] ?? "";
+  const value = process.env[envNameForInput(name)] ?? "";
   const trimmed = options.trimWhitespace === false ? value : value.trim();
   if (options.required && !trimmed) {
     throw new Error(`Input required and not supplied: ${name}`);
