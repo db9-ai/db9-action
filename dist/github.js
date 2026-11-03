@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 
@@ -45,6 +46,19 @@ function appendFileCommand(file, value) {
   return true;
 }
 
+function keyValueFileCommand(name, value) {
+  const text = String(value);
+  if (!/[\r\n]/.test(text)) {
+    return `${name}=${text}`;
+  }
+
+  let delimiter;
+  do {
+    delimiter = `ghadelimiter_${crypto.randomUUID()}`;
+  } while (String(name).includes(delimiter) || text.includes(delimiter));
+  return `${name}<<${delimiter}${os.EOL}${text}${os.EOL}${delimiter}`;
+}
+
 function escapeCommandValue(value) {
   return String(value)
     .replace(/%/g, "%25")
@@ -53,24 +67,27 @@ function escapeCommandValue(value) {
 }
 
 function setOutput(name, value) {
-  if (!appendFileCommand(process.env.GITHUB_OUTPUT, `${name}=${value}`)) {
+  if (!appendFileCommand(process.env.GITHUB_OUTPUT, keyValueFileCommand(name, value))) {
     console.log(`::set-output name=${name}::${escapeCommandValue(value)}`);
   }
 }
 
 function exportVariable(name, value) {
   process.env[name] = String(value);
-  appendFileCommand(process.env.GITHUB_ENV, `${name}=${value}`);
+  appendFileCommand(process.env.GITHUB_ENV, keyValueFileCommand(name, value));
 }
 
 function addPath(path) {
   const value = String(path);
+  if (/[\r\n]/.test(value)) {
+    throw new Error("PATH entries must not contain newline characters");
+  }
   process.env.PATH = `${value}${process.platform === "win32" ? ";" : ":"}${process.env.PATH || ""}`;
   appendFileCommand(process.env.GITHUB_PATH, value);
 }
 
 function saveState(name, value) {
-  if (!appendFileCommand(process.env.GITHUB_STATE, `${name}=${value}`)) {
+  if (!appendFileCommand(process.env.GITHUB_STATE, keyValueFileCommand(name, value))) {
     console.log(`::save-state name=${name}::${escapeCommandValue(value)}`);
   }
 }
