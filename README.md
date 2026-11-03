@@ -173,12 +173,18 @@ and deletes only databases in that project whose names start with `cleanup-prefi
 
 ## Security notes
 
-- The action masks `db9-api-key` and the generated `database-url` in workflow logs.
+- The action masks `db9-api-key`, anonymous credentials and account ID, and the
+  generated `database-url` in workflow logs. Informational messages suspend runner
+  command parsing while displaying API-returned text.
 - `db9-api-url` must use `https`. The action does not follow redirects before sending the API credential.
 - Project restrictions apply to this action. Anyone with the same API key can
   call the API directly and access the projects permitted by that key.
-- Anonymous mode stores its temporary API token only in GitHub Actions state so
-  the post step can delete the database.
+- API-key mode reads the key again from the action input in the post step instead
+  of copying it into GitHub Actions state.
+- Anonymous mode stores its temporary API token and refresh secret in GitHub
+  Actions state so the post step can delete the database even if the token expires.
+  The signed cleanup record contains the account ID but no token or refresh secret.
+  State is not a security boundary against untrusted code running on the same runner.
 - The exported connection URL is temporary because it uses a DB9 connect token.
   Prefer passing it through GitHub Actions environment variables or outputs
   instead of printing it.

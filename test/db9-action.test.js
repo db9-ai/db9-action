@@ -192,6 +192,8 @@ test("runMain creates an anonymous database through the DB9 API", async (t) => {
     const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
     assert.match(state, /access-token=anon-token/);
     assert.match(state, /anonymous-secret=anon-secret/);
+    assert.deepEqual(state.trimEnd().split(/\r?\n/).map((line) => line.slice(0, line.indexOf("="))).sort(),
+      ["access-token", "anonymous-secret", "cleanup-record"]);
     for (const line of state.trimEnd().split(/\r?\n/)) {
       const separator = line.indexOf("=");
       process.env[`STATE_${line.slice(0, separator)}`] = line.slice(separator + 1);
@@ -267,6 +269,9 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
     assert.equal(calls[0].headers.Authorization, "Bearer api-key");
     assert.ok(calls.every((call) => new URL(call.url).origin === "https://custom.example.test"));
     const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
+    assert.doesNotMatch(state, /^access-token=/m);
+    assert.doesNotMatch(state, /^anonymous-secret=/m);
+    assert.deepEqual(state.trimEnd().split(/\r?\n/).map((line) => line.slice(0, line.indexOf("="))), ["cleanup-record"]);
     const record = state.split(/\r?\n/).find((line) => line.startsWith("cleanup-record=")).slice("cleanup-record=".length);
     const [version, payload] = record.split(".");
     assert.equal(version, "v2");
