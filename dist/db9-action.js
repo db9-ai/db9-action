@@ -465,32 +465,44 @@ function saveCleanupState(inputs, access, database) {
     "database-name": database.name,
     "database-id": database.id,
     "api-url": inputs.apiUrl,
-    "access-token": access.token,
   };
   if (access.anonymous) {
     values["anonymous-id"] = access.anonymous.id;
-    values["anonymous-secret"] = access.anonymous.secret;
   }
   for (const [name, value] of Object.entries(values)) {
     github.saveState(name, value);
   }
+  github.saveState("access-token", access.token);
+  if (access.anonymous) {
+    github.saveState("anonymous-secret", access.anonymous.secret);
+  }
   const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
-  const signature = crypto.createHmac("sha256", access.token).update(payload).digest("base64url");
-  github.saveState("cleanup-record", `${payload}.${signature}`);
+  const signature = crypto.createHmac("sha256", access.token)
+    .update(payload)
+    .update("\0")
+    .update(access.anonymous ? access.anonymous.secret : "")
+    .digest("base64url");
+  github.saveState("cleanup-record", `v2.${payload}.${signature}`);
 }
 
-function readCleanupRecord(accessToken) {
+function readCleanupRecord(accessToken, anonymousSecret) {
   const record = github.getState("cleanup-record");
   if (!record) {
     return null;
   }
-  const separator = record.lastIndexOf(".");
-  if (separator < 1 || separator === record.length - 1) {
+  const isV2 = record.startsWith("v2.");
+  const signed = isV2 ? record.slice(3) : record;
+  const separator = signed.lastIndexOf(".");
+  if (separator < 1 || separator === signed.length - 1) {
     throw new Error("DB9 cleanup record is malformed");
   }
-  const payload = record.slice(0, separator);
-  const signature = record.slice(separator + 1);
-  const expected = crypto.createHmac("sha256", accessToken).update(payload).digest("base64url");
+  const payload = signed.slice(0, separator);
+  const signature = signed.slice(separator + 1);
+  const hmac = crypto.createHmac("sha256", accessToken).update(payload);
+  if (isV2) {
+    hmac.update("\0").update(anonymousSecret);
+  }
+  const expected = hmac.digest("base64url");
   const actualBuffer = Buffer.from(signature);
   const expectedBuffer = Buffer.from(expected);
   if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
@@ -528,9 +540,13 @@ async function cleanupDatabase(options = {}) {
     github.setSecret(apiKey);
   }
   const legacyToken = apiKey || github.getState("access-token");
+  const savedAnonymousSecret = github.getState("anonymous-secret");
+  if (savedAnonymousSecret) {
+    github.setSecret(savedAnonymousSecret);
+  }
   let record = null;
   try {
-    record = legacyToken ? readCleanupRecord(legacyToken) : null;
+    record = legacyToken ? readCleanupRecord(legacyToken, savedAnonymousSecret) : null;
   } catch (error) {
     github.warning(`DB9 cleanup skipped: ${error.message}`);
     return;
@@ -551,7 +567,7 @@ async function cleanupDatabase(options = {}) {
     return;
   }
 
-  let token = apiKey || readCleanupState(record, "access-token");
+  let token = legacyToken || readCleanupState(record, "access-token");
   if (token) {
     github.setSecret(token);
   } else {
@@ -559,7 +575,7 @@ async function cleanupDatabase(options = {}) {
       inputs,
       {
         id: readCleanupState(record, "anonymous-id"),
-        secret: readCleanupState(record, "anonymous-secret"),
+        secret: savedAnonymousSecret || readCleanupState(record, "anonymous-secret"),
       },
       options,
     );
@@ -572,7 +588,7 @@ async function cleanupDatabase(options = {}) {
   } catch (error) {
     const anonymous = {
       id: readCleanupState(record, "anonymous-id"),
-      secret: readCleanupState(record, "anonymous-secret"),
+      secret: savedAnonymousSecret || readCleanupState(record, "anonymous-secret"),
     };
     if (!apiKey && error.status === 401 && anonymous.id && anonymous.secret) {
       try {

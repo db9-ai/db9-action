@@ -176,6 +176,42 @@ test("runMain creates an anonymous database through the DB9 API", async () => {
     const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
     assert.match(state, /access-token=anon-token/);
     assert.match(state, /anonymous-secret=anon-secret/);
+    for (const line of state.trimEnd().split(/\r?\n/)) {
+      const separator = line.indexOf("=");
+      process.env[`STATE_${line.slice(0, separator)}`] = line.slice(separator + 1);
+    }
+    const record = process.env["STATE_cleanup-record"];
+    const [version, payload] = record.split(".");
+    assert.equal(version, "v2");
+    const values = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    assert.equal(values["access-token"], undefined);
+    assert.equal(values["anonymous-secret"], undefined);
+    assert.ok(!Buffer.from(payload, "base64url").toString("utf8").includes("anon-token"));
+    assert.ok(!Buffer.from(payload, "base64url").toString("utf8").includes("anon-secret"));
+
+    const rejectedCalls = [];
+    process.env["STATE_anonymous-secret"] = "modified-secret";
+    await cleanupDatabase({ fetchImpl: mockFetch({}, rejectedCalls) });
+    assert.deepEqual(rejectedCalls, []);
+
+    process.env["STATE_anonymous-secret"] = "anon-secret";
+    const cleanupCalls = [];
+    await cleanupDatabase({
+      fetchImpl: mockFetch({
+        "DELETE /customer/databases/db_123": [
+          { status: 401, body: { message: "expired" } },
+          { status: 200, body: {} },
+        ],
+        "POST /customer/anonymous-refresh": { body: { token: "refreshed-token" } },
+      }, cleanupCalls),
+    });
+    assert.deepEqual(cleanupCalls.map((call) => call.key), [
+      "DELETE /customer/databases/db_123",
+      "POST /customer/anonymous-refresh",
+      "DELETE /customer/databases/db_123",
+    ]);
+    assert.equal(cleanupCalls[0].headers.Authorization, "Bearer anon-token");
+    assert.equal(cleanupCalls[2].headers.Authorization, "Bearer refreshed-token");
   });
 });
 
@@ -214,6 +250,11 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
     ]);
     assert.equal(calls[0].headers.Authorization, "Bearer api-key");
     assert.ok(calls.every((call) => new URL(call.url).origin === "https://custom.example.test"));
+    const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
+    const record = state.split(/\r?\n/).find((line) => line.startsWith("cleanup-record=")).slice("cleanup-record=".length);
+    const [version, payload] = record.split(".");
+    assert.equal(version, "v2");
+    assert.ok(!Buffer.from(payload, "base64url").toString("utf8").includes("api-key"));
   });
 });
 
