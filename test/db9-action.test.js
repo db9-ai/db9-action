@@ -255,6 +255,17 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
     const [version, payload] = record.split(".");
     assert.equal(version, "v2");
     assert.ok(!Buffer.from(payload, "base64url").toString("utf8").includes("api-key"));
+    for (const line of state.trimEnd().split(/\r?\n/)) {
+      const separator = line.indexOf("=");
+      process.env[`STATE_${line.slice(0, separator)}`] = line.slice(separator + 1);
+    }
+    process.env["STATE_anonymous-secret"] = "unrelated-state";
+    const cleanupCalls = [];
+    await cleanupDatabase({
+      fetchImpl: mockFetch({ "DELETE /customer/databases/db_123": { body: {} } }, cleanupCalls),
+    });
+    assert.deepEqual(cleanupCalls.map((call) => call.key), ["DELETE /customer/databases/db_123"]);
+    assert.equal(cleanupCalls[0].headers.Authorization, "Bearer api-key");
   });
 });
 
