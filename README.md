@@ -168,6 +168,7 @@ the authenticated account and deletes only names that start with `cleanup-prefix
 ## Security notes
 
 - The action masks `db9-api-key` and the generated `database-url` in workflow logs.
+- `db9-api-url` must use `https`. The action does not follow redirects before sending the API credential.
 - Anonymous mode stores its temporary API token only in GitHub Actions state so
   the post step can delete the database.
 - The exported connection URL is temporary because it uses a DB9 connect token.

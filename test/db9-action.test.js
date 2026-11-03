@@ -440,3 +440,40 @@ test("cleanupDatabase rejects a cleanup record signed by a different token", asy
     assert.deepEqual(calls, []);
   });
 });
+
+test("apiUrl keeps a custom https base path and rejects unsafe URLs", () => {
+  assert.equal(
+    apiUrl("https://custom.example.test/base/", "/customer/databases"),
+    "https://custom.example.test/base/customer/databases",
+  );
+  assert.throws(() => apiUrl("http://attacker.example", "/customer/databases"), /https/);
+  assert.throws(() => apiUrl("https://user:secret@api.db9.ai", "/customer/databases"), /credentials/);
+  assert.throws(() => apiUrl("https://api.db9.ai/#fragment", "/customer/databases"), /fragment/);
+});
+
+test("runMain rejects a non-https API URL before sending the API key", async () => {
+  await withGithubFiles(async () => {
+    process.env["INPUT_DB9-API-KEY"] = "api-key";
+    process.env["INPUT_DATABASE-NAME"] = "ci-db";
+    process.env["INPUT_DB9-API-URL"] = "http://attacker.example/db";
+    const calls = [];
+    await assert.rejects(
+      () => runMain({ fetchImpl: async (url) => { calls.push(url); return new Response("{}"); } }),
+      /https/,
+    );
+    assert.deepEqual(calls, []);
+  });
+});
+
+test("requestJson asks fetch not to follow redirects", async () => {
+  let seen;
+  await requestJson("GET", "https://api.db9.ai", "/customer/databases", {
+    token: "api-key",
+    fetchImpl: async (_url, options) => {
+      seen = options;
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.equal(seen.redirect, "error");
+  assert.equal(seen.headers.Authorization, "Bearer api-key");
+});

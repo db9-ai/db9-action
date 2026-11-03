@@ -97,7 +97,7 @@ function readInputs() {
   }
   return {
     apiKey,
-    apiUrl: github.getInput("db9-api-url") || DEFAULT_API_URL,
+    apiUrl: normalizeApiUrl(github.getInput("db9-api-url")),
     cleanup: github.getBooleanInput("cleanup", true),
     cleanupPrefix: github.getInput("cleanup-prefix"),
     databaseName: github.getInput("database-name"),
@@ -117,8 +117,28 @@ function readInputs() {
   };
 }
 
+function normalizeApiUrl(value) {
+  const candidate = String(value || "").trim() || DEFAULT_API_URL;
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch (_error) {
+    throw new Error(`DB9 API URL must be an https URL, got: ${candidate}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`DB9 API URL must use https, got: ${parsed.protocol.replace(":", "")}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("DB9 API URL must not include credentials");
+  }
+  if (parsed.hash) {
+    throw new Error("DB9 API URL must not include a fragment");
+  }
+  return candidate.replace(/\/+$/g, "");
+}
+
 function apiUrl(baseUrl, requestPath) {
-  return `${baseUrl.replace(/\/+$/g, "")}/${requestPath.replace(/^\/+/g, "")}`;
+  return `${normalizeApiUrl(baseUrl)}/${requestPath.replace(/^\/+/g, "")}`;
 }
 
 async function readResponseBody(response) {
@@ -149,6 +169,7 @@ async function requestJson(method, baseUrl, requestPath, options = {}) {
   const response = await (options.fetchImpl || fetch)(apiUrl(baseUrl, requestPath), {
     method,
     headers,
+    redirect: "error",
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const body = await readResponseBody(response);
@@ -505,7 +526,7 @@ async function cleanupDatabase(options = {}) {
   }
   const inputs = {
     apiKey,
-    apiUrl: readCleanupState(record, "api-url") || github.getInput("db9-api-url") || DEFAULT_API_URL,
+    apiUrl: normalizeApiUrl(readCleanupState(record, "api-url") || github.getInput("db9-api-url")),
   };
   const target = readCleanupState(record, "database-id") || readCleanupState(record, "database-name");
   if (!target) {
@@ -596,6 +617,7 @@ module.exports = {
   runMain,
   sanitizeDatabaseName,
   sanitizeDatabasePrefix,
+  normalizeApiUrl,
   sanitizeMode,
   waitForDatabaseActive,
 };
