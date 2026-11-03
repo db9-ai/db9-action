@@ -59,8 +59,9 @@ inputs:
     description: DB9 API key. Omit this input to use anonymous DB9 provisioning.
     required: false
   db9-api-url:
-    description: DB9 API base URL.
+    description: DB9 API base URL. Must use https. Requests are not redirected.
     required: false
+    default: https://api.db9.ai
   cleanup:
     description: Delete the created database in the action post step.
     required: false
