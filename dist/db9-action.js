@@ -546,7 +546,7 @@ async function cleanupDatabase(options = {}) {
   }
   let record = null;
   try {
-    record = legacyToken ? readCleanupRecord(legacyToken, savedAnonymousSecret) : null;
+    record = legacyToken ? readCleanupRecord(legacyToken, apiKey ? "" : savedAnonymousSecret) : null;
   } catch (error) {
     github.warning(`DB9 cleanup skipped: ${error.message}`);
     return;
