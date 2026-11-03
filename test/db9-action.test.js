@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const {
   apiUrl,
@@ -60,6 +61,16 @@ async function withGithubFiles(fn) {
     process.env = previous;
     fs.rmSync(temp, { recursive: true, force: true });
   }
+}
+
+function signedCleanupRecord(values, token = "anon-token", anonymousSecret = "") {
+  const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
+  const signature = crypto.createHmac("sha256", token)
+    .update(payload)
+    .update("\0")
+    .update(anonymousSecret)
+    .digest("base64url");
+  return `v2.${payload}.${signature}`;
 }
 
 test("sanitizeDatabaseName keeps names DNS-like and bounded", () => {
@@ -530,11 +541,13 @@ test("cleanup mode rejects a matching database without an ID before deleting any
 
 test("cleanupDatabase deletes the recorded database through the DB9 API", async () => {
   await withGithubFiles(async () => {
-    process.env.STATE_created = "true";
-    process.env.STATE_cleanup = "true";
-    process.env["STATE_database-id"] = "db_123";
     process.env["STATE_access-token"] = "anon-token";
-    process.env["STATE_api-url"] = "https://api.db9.ai";
+    process.env["STATE_cleanup-record"] = signedCleanupRecord({
+      created: "true",
+      cleanup: "true",
+      "database-id": "db_123",
+      "api-url": "https://api.db9.ai",
+    });
 
     const calls = [];
     await cleanupDatabase({
@@ -568,11 +581,8 @@ test("cleanupDatabase uses the signed cleanup record instead of modified individ
       "database-name": "ci-db",
       "database-id": "db_123",
       "api-url": "https://api.db9.ai",
-      "access-token": "anon-token",
     };
-    const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
-    const signature = require("node:crypto").createHmac("sha256", "anon-token").update(payload).digest("base64url");
-    process.env["STATE_cleanup-record"] = `${payload}.${signature}`;
+    process.env["STATE_cleanup-record"] = signedCleanupRecord(values);
 
     const calls = [];
     await cleanupDatabase({
@@ -607,16 +617,75 @@ test("cleanupDatabase rejects a cleanup record signed by a different token", asy
       "database-name": "ci-db",
       "database-id": "db_forged",
       "api-url": "https://attacker.example.test",
-      "access-token": "other-token",
     };
-    const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
-    const signature = require("node:crypto").createHmac("sha256", "other-token").update(payload).digest("base64url");
-    process.env["STATE_cleanup-record"] = `${payload}.${signature}`;
+    process.env["STATE_cleanup-record"] = signedCleanupRecord(values, "other-token");
 
     const calls = [];
     await cleanupDatabase({
       fetchImpl: mockFetch({}, calls),
     });
+
+    assert.deepEqual(calls, []);
+  });
+});
+
+test("cleanupDatabase refuses missing, legacy, malformed, or unknown records even with unsigned state", async () => {
+  const values = {
+    created: "true",
+    cleanup: "true",
+    "database-id": "db_123",
+    "api-url": "https://api.db9.ai",
+  };
+  const payload = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
+  const legacy = `${payload}.${crypto.createHmac("sha256", "api-key").update(payload).digest("base64url")}`;
+  const valid = signedCleanupRecord(values, "api-key");
+  const records = ["", legacy, valid.replace(/^v2\./, "v3."), "v2.invalid", "v2..", signedCleanupRecord([], "api-key")];
+  for (const record of records) {
+    await withGithubFiles(async () => {
+      process.env["INPUT_DB9-API-KEY"] = "api-key";
+      process.env.STATE_created = "true";
+      process.env.STATE_cleanup = "true";
+      process.env["STATE_database-id"] = "db_123";
+      process.env["STATE_api-url"] = "https://attacker.example.test";
+      process.env["STATE_cleanup-record"] = record;
+      const calls = [];
+
+      await cleanupDatabase({ fetchImpl: mockFetch({}, calls) });
+
+      assert.deepEqual(calls, [], `Unexpected request for record: ${record}`);
+    });
+  }
+});
+
+test("cleanupDatabase refuses a modified signed payload", async () => {
+  await withGithubFiles(async () => {
+    process.env["STATE_access-token"] = "anon-token";
+    const original = signedCleanupRecord({
+      created: "true", cleanup: "true", "database-id": "db_original", "api-url": "https://api.db9.ai",
+    });
+    const [version, payload, signature] = original.split(".");
+    const values = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    values["database-id"] = "db_forged";
+    const modified = Buffer.from(JSON.stringify(values), "utf8").toString("base64url");
+    process.env["STATE_cleanup-record"] = `${version}.${modified}.${signature}`;
+    const calls = [];
+
+    await cleanupDatabase({ fetchImpl: mockFetch({}, calls) });
+
+    assert.deepEqual(calls, []);
+  });
+});
+
+test("cleanupDatabase honors signed cleanup false despite conflicting individual state", async () => {
+  await withGithubFiles(async () => {
+    process.env["STATE_access-token"] = "anon-token";
+    process.env.STATE_cleanup = "true";
+    process.env["STATE_cleanup-record"] = signedCleanupRecord({
+      created: "true", cleanup: "false", "database-id": "db_keep", "api-url": "https://api.db9.ai",
+    });
+    const calls = [];
+
+    await cleanupDatabase({ fetchImpl: mockFetch({}, calls) });
 
     assert.deepEqual(calls, []);
   });

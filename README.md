@@ -160,6 +160,9 @@ Cleanup is enabled by default. The action records the created database and runs:
 in the post step. Set `cleanup: false` only when you intentionally want to keep
 the database after the workflow finishes.
 
+Post cleanup requires the signed v2 record saved by the main step. If the record
+is missing, uses an older format, or fails verification, deletion is skipped.
+
 `cleanup: false` means db9-action will not delete the database. DB9
 documentation does not specify an automatic retention period for anonymous
 databases. Anonymous databases count toward the 5-database anonymous account
