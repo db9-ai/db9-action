@@ -112,6 +112,7 @@ jobs:
         with:
           mode: cleanup
           db9-api-key: ${{ secrets.DB9_API_KEY }}
+          project-id: ${{ vars.DB9_PROJECT_ID }}
           cleanup-prefix: ci-
 ```
 
@@ -124,7 +125,7 @@ jobs:
 | `database-name-prefix` | `gha` | Prefix used when generating a database name. |
 | `worker-id` | unset | Optional worker or matrix identifier appended to generated database names. |
 | `region` | DB9 default | DB9 region to create the database in. |
-| `project-id` | DB9 default | DB9 project ID. Required for branch mode, where the source must belong to the specified project. |
+| `project-id` | DB9 default | DB9 project ID. Required for branch and cleanup modes, which only use databases in the specified project. |
 | `database-user` | `admin` | Database user to request in the temporary connection URL. |
 | `source-database-id` | unset | Source DB9 database ID for `branch` mode. |
 | `source-database-name` | unset | Source DB9 database name for `branch` mode. Used only when `source-database-id` is not set. |
@@ -164,13 +165,15 @@ documentation does not specify an automatic retention period for anonymous
 databases. Anonymous databases count toward the 5-database anonymous account
 limit, and the temporary connection URL expires independently.
 
-`mode: cleanup` is separate from the post step cleanup. It lists databases in
-the authenticated account and deletes only names that start with `cleanup-prefix`.
+`mode: cleanup` is separate from the post step cleanup. It requires `project-id`
+and deletes only databases in that project whose names start with `cleanup-prefix`.
 
 ## Security notes
 
 - The action masks `db9-api-key` and the generated `database-url` in workflow logs.
 - `db9-api-url` must use `https`. The action does not follow redirects before sending the API credential.
+- Project restrictions apply to this action. Anyone with the same API key can
+  call the API directly and access the projects permitted by that key.
 - Anonymous mode stores its temporary API token only in GitHub Actions state so
   the post step can delete the database.
 - The exported connection URL is temporary because it uses a DB9 connect token.
