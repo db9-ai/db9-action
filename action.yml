@@ -25,7 +25,7 @@ inputs:
     description: DB9 region to create the database in.
     required: false
   project-id:
-    description: DB9 project ID to create the database in.
+    description: DB9 project ID. Required for branch mode; the source database must belong to this project.
     required: false
   database-user:
     description: Database user to request in the temporary connection URL.

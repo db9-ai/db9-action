@@ -221,12 +221,19 @@ test("runMain creates a branch and waits until ACTIVE", async () => {
   await withGithubFiles(async () => {
     process.env["INPUT_DB9-API-KEY"] = "api-key";
     process.env.INPUT_MODE = "branch";
+    process.env["INPUT_PROJECT-ID"] = "project-1";
     process.env["INPUT_SOURCE-DATABASE-ID"] = "db_source";
+    process.env["INPUT_SOURCE-DATABASE-NAME"] = "ignored";
     process.env["INPUT_DATABASE-NAME"] = "ci-branch";
+    process.env["INPUT_SNAPSHOT-AT"] = "2026-07-04T03:30:00Z";
 
     const calls = [];
     const fetchImpl = mockFetch(
       {
+        "GET /customer/databases?all=true&project_id=project-1": {
+          status: 200,
+          body: [{ id: "db_source", name: "staging", project_id: "project-1" }],
+        },
         "POST /customer/databases/db_source/branch": {
           status: 201,
           body: {
@@ -257,11 +264,12 @@ test("runMain creates a branch and waits until ACTIVE", async () => {
     await runMain({ fetchImpl, pollIntervalMs: 1 });
 
     assert.deepEqual(calls.map((call) => call.key), [
+      "GET /customer/databases?all=true&project_id=project-1",
       "POST /customer/databases/db_source/branch",
       "GET /customer/databases/db_branch",
       "POST /customer/databases/db_branch/connect-token",
     ]);
-    assert.deepEqual(calls[0].body, { name: "ci-branch" });
+    assert.deepEqual(calls[1].body, { name: "ci-branch", snapshot_at: "2026-07-04T03:30:00Z" });
 
     const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8");
     assert.match(output, /database-id=db_branch/);
@@ -273,6 +281,7 @@ test("runMain resolves branch source by database name", async () => {
   await withGithubFiles(async () => {
     process.env["INPUT_DB9-API-KEY"] = "api-key";
     process.env.INPUT_MODE = "branch";
+    process.env["INPUT_PROJECT-ID"] = "project-1";
     process.env["INPUT_SOURCE-DATABASE-NAME"] = "staging";
     process.env["INPUT_DATABASE-NAME"] = "ci-branch";
     process.env.INPUT_WAIT = "false";
@@ -280,9 +289,12 @@ test("runMain resolves branch source by database name", async () => {
     const calls = [];
     const fetchImpl = mockFetch(
       {
-        "GET /customer/databases?all=true": {
+        "GET /customer/databases?all=true&project_id=project-1": {
           status: 200,
-          body: [{ id: "db_source", name: "staging", state: "ACTIVE" }],
+          body: [
+            { id: "db_other", name: "staging", project_id: "project-2" },
+            { id: "db_source", name: "staging", state: "ACTIVE", project_id: "project-1" },
+          ],
         },
         "POST /customer/databases/db_source/branch": {
           status: 201,
@@ -305,10 +317,62 @@ test("runMain resolves branch source by database name", async () => {
     await runMain({ fetchImpl });
 
     assert.deepEqual(calls.map((call) => call.key), [
-      "GET /customer/databases?all=true",
+      "GET /customer/databases?all=true&project_id=project-1",
       "POST /customer/databases/db_source/branch",
       "POST /customer/databases/db_branch/connect-token",
     ]);
+  });
+});
+
+test("branch mode requires a project before any API request", async () => {
+  await withGithubFiles(async () => {
+    process.env.INPUT_MODE = "branch";
+    process.env["INPUT_SOURCE-DATABASE-ID"] = "db_source";
+    delete process.env["INPUT_DB9-API-KEY"];
+    delete process.env["INPUT_PROJECT-ID"];
+
+    const calls = [];
+    await assert.rejects(() => runMain({ fetchImpl: mockFetch({}, calls) }), /branch mode requires project-id/);
+    assert.deepEqual(calls, []);
+  });
+});
+
+test("branch mode rejects sources outside the project before creating a branch", async () => {
+  for (const sourceInput of ["INPUT_SOURCE-DATABASE-ID", "INPUT_SOURCE-DATABASE-NAME"]) {
+    await withGithubFiles(async () => {
+      process.env["INPUT_DB9-API-KEY"] = "api-key";
+      process.env.INPUT_MODE = "branch";
+      process.env["INPUT_PROJECT-ID"] = "project-1";
+      process.env[sourceInput] = sourceInput.endsWith("-ID") ? "db_other" : "staging";
+      const calls = [];
+      const fetchImpl = mockFetch({
+        "GET /customer/databases?all=true&project_id=project-1": {
+          body: [
+            { id: "db_other", name: "staging", project_id: "project-2" },
+            { id: "db_unscoped", name: "staging" },
+          ],
+        },
+      }, calls);
+
+      await assert.rejects(() => runMain({ fetchImpl }), /source database in the specified project/);
+      assert.deepEqual(calls.map((call) => call.key), ["GET /customer/databases?all=true&project_id=project-1"]);
+    });
+  }
+});
+
+test("branch mode rejects an unknown source without creating a branch", async () => {
+  await withGithubFiles(async () => {
+    process.env["INPUT_DB9-API-KEY"] = "api-key";
+    process.env.INPUT_MODE = "branch";
+    process.env["INPUT_PROJECT-ID"] = "project-1";
+    process.env["INPUT_SOURCE-DATABASE-NAME"] = "missing";
+    const calls = [];
+    const fetchImpl = mockFetch({
+      "GET /customer/databases?all=true&project_id=project-1": { body: [] },
+    }, calls);
+
+    await assert.rejects(() => runMain({ fetchImpl }), /source database in the specified project/);
+    assert.deepEqual(calls.map((call) => call.key), ["GET /customer/databases?all=true&project_id=project-1"]);
   });
 });
 
