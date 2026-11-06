@@ -634,6 +634,9 @@ async function runMain(options = {}) {
     throw new Error("DB9 create response is missing a database ID");
   }
   const shouldWait = inputs.mode === "branch" || (created.state && created.state !== "ACTIVE");
+  if (shouldWait) {
+    saveCleanupState(inputs, access, created);
+  }
   const database = shouldWait ? await waitForDatabaseActive(inputs, access, created, options) : created;
   saveCleanupState(inputs, access, database);
   const connection = await connectDatabase(inputs, access, database, options);

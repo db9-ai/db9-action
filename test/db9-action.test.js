@@ -388,6 +388,117 @@ test("runMain rejects missing or invalid created IDs before polling or connectin
   }
 });
 
+for (const failure of ["timeout", "terminal", "poll-error"]) {
+  test(`runMain preserves cleanup state after an ACTIVE wait ${failure}`, async (context) => {
+    context.mock.method(console, "log", () => {});
+    for (const mode of ["database", "branch"]) {
+      for (const anonymous of [false, true]) {
+        for (const cleanup of [true, false]) {
+          await withGithubFiles(async () => {
+            if (anonymous) {
+              delete process.env["INPUT_DB9-API-KEY"];
+            } else {
+              process.env["INPUT_DB9-API-KEY"] = "api-key";
+            }
+            process.env.INPUT_MODE = mode;
+            process.env.INPUT_CLEANUP = String(cleanup);
+            process.env["INPUT_PROJECT-ID"] = "project-1";
+            process.env["INPUT_SOURCE-DATABASE-ID"] = "db_source";
+            process.env["INPUT_DATABASE-NAME"] = "shared-name";
+            process.env["INPUT_WAIT-TIMEOUT-SECONDS"] = "1";
+            const calls = [];
+            const createPath = mode === "branch"
+              ? "POST /customer/databases/db_source/branch"
+              : "POST /customer/databases";
+            const fetchImpl = mockFetch({
+              "POST /customer/anonymous-register": {
+                body: { token: "anon-token", anonymous_id: "sub_123", anonymous_secret: "anon-secret" },
+              },
+              "GET /customer/databases?all=true&project_id=project-1": {
+                body: [{ id: "db_source", name: "staging", project_id: "project-1" }],
+              },
+              [createPath]: { body: { id: "db_created", name: "shared-name", state: "CREATING" } },
+              "GET /customer/databases/db_created": failure === "terminal"
+                ? { body: { id: "db_created", state: "FAILED" } }
+                : { status: 503, body: { message: "status poll unavailable" } },
+            }, calls);
+            let clock;
+            if (failure === "timeout") {
+              let now = 0;
+              clock = context.mock.method(Date, "now", () => { now += 1000; return now; });
+            }
+            const expectedError = failure === "timeout"
+              ? /Timed out waiting/
+              : failure === "terminal" ? /reached FAILED/ : /status poll unavailable/;
+            try {
+              await assert.rejects(() => runMain({ fetchImpl, pollIntervalMs: 1 }), expectedError);
+            } finally {
+              if (clock) {
+                clock.mock.restore();
+              }
+            }
+            const expectedCalls = [
+              ...(anonymous ? ["POST /customer/anonymous-register"] : []),
+              ...(mode === "branch" ? ["GET /customer/databases?all=true&project_id=project-1"] : []),
+              createPath,
+              ...(failure === "timeout" ? [] : ["GET /customer/databases/db_created"]),
+            ];
+            assert.deepEqual(calls.map((call) => call.key), expectedCalls);
+            assert.ok(!fs.existsSync(process.env.GITHUB_OUTPUT));
+            assert.ok(!fs.existsSync(process.env.GITHUB_ENV));
+            assert.ok(fs.existsSync(process.env.GITHUB_STATE), "cleanup state must be saved before the ACTIVE wait");
+            const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
+            const lines = state.trimEnd().split(/\r?\n/);
+            assert.deepEqual(lines.map((line) => line.slice(0, line.indexOf("="))).sort(),
+              anonymous ? ["access-token", "anonymous-secret", "cleanup-record"] : ["cleanup-record"]);
+            for (const line of lines) {
+              const separator = line.indexOf("=");
+              process.env[`STATE_${line.slice(0, separator)}`] = line.slice(separator + 1);
+            }
+            const token = anonymous ? "anon-token" : "api-key";
+            const values = {
+              created: "true",
+              cleanup: String(cleanup),
+              "database-name": "shared-name",
+              "database-id": "db_created",
+              "api-url": "https://api.db9.ai",
+              ...(anonymous ? { "anonymous-id": "sub_123" } : {}),
+            };
+            const record = process.env["STATE_cleanup-record"];
+            assert.equal(record, signedCleanupRecord(values, token, anonymous ? "anon-secret" : ""));
+            assert.ok(!JSON.stringify(values).includes(token));
+            assert.ok(!state.includes("api-key"));
+            process.env["STATE_database-id"] = "db_source";
+            process.env["STATE_cleanup-record"] = `${record}modified`;
+            const rejectedCalls = [];
+            await cleanupDatabase({ fetchImpl: mockFetch({}, rejectedCalls) });
+            assert.deepEqual(rejectedCalls, []);
+            process.env["STATE_cleanup-record"] = record;
+            const cleanupCalls = [];
+            await cleanupDatabase({
+              fetchImpl: mockFetch({
+                "DELETE /customer/databases/db_created": anonymous
+                  ? [{ status: 401, body: { message: "expired" } }, { body: {} }]
+                  : { body: {} },
+                "POST /customer/anonymous-refresh": { body: { token: "refreshed-token" } },
+              }, cleanupCalls),
+            });
+            assert.deepEqual(cleanupCalls.map((call) => call.key), !cleanup ? [] : anonymous
+              ? ["DELETE /customer/databases/db_created", "POST /customer/anonymous-refresh", "DELETE /customer/databases/db_created"]
+              : ["DELETE /customer/databases/db_created"]);
+            if (cleanup) {
+              assert.equal(cleanupCalls[0].headers.Authorization, `Bearer ${token}`);
+              if (anonymous) {
+                assert.equal(cleanupCalls[2].headers.Authorization, "Bearer refreshed-token");
+              }
+            }
+          });
+        }
+      }
+    }
+  });
+}
+
 test("runMain creates a branch and waits until ACTIVE", async () => {
   await withGithubFiles(async () => {
     process.env["INPUT_DB9-API-KEY"] = "api-key";
@@ -416,7 +527,7 @@ test("runMain creates a branch and waits until ACTIVE", async () => {
         },
         "GET /customer/databases/db_branch": {
           status: 200,
-          body: { id: "db_branch", name: "ci-branch", state: "ACTIVE" },
+          body: { id: "db_branch", name: "ready-branch", state: "ACTIVE" },
         },
         "POST /customer/databases/db_branch/connect-token": {
           status: 201,
@@ -444,7 +555,19 @@ test("runMain creates a branch and waits until ACTIVE", async () => {
 
     const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8");
     assert.match(output, /database-id=db_branch/);
+    assert.match(output, /database-name=ready-branch/);
     assert.match(output, /database-state=ACTIVE/);
+    const records = fs.readFileSync(process.env.GITHUB_STATE, "utf8").trimEnd().split(/\r?\n/);
+    assert.equal(records.length, 2);
+    for (const [index, name] of ["ci-branch", "ready-branch"].entries()) {
+      assert.equal(records[index], `cleanup-record=${signedCleanupRecord({
+        created: "true",
+        cleanup: "true",
+        "database-name": name,
+        "database-id": "db_branch",
+        "api-url": "https://api.db9.ai",
+      }, "api-key")}`);
+    }
   });
 });
 
