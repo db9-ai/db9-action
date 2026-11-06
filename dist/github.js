@@ -115,6 +115,18 @@ function warning(message) {
   console.log(`::warning::${escapeCommandValue(message)}`);
 }
 
+function error(message) {
+  console.log(`::error::${escapeCommandValue(message)}`);
+}
+
+function appendSummary(message) {
+  try {
+    return appendFileCommand(process.env.GITHUB_STEP_SUMMARY, message);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function setFailed(error) {
   const message = error instanceof Error ? error.message : String(error);
   console.log(`::error::${escapeCommandValue(message)}`);
@@ -131,7 +143,9 @@ function endGroup() {
 
 module.exports = {
   addPath,
+  appendSummary,
   endGroup,
+  error,
   exportVariable,
   getBooleanInput,
   getInput,

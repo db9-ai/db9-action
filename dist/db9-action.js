@@ -515,7 +515,9 @@ function readCleanupRecord(accessToken, anonymousSecret) {
   const actualBuffer = Buffer.from(signature);
   const expectedBuffer = Buffer.from(expected);
   if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
-    throw new Error("DB9 cleanup record failed integrity verification");
+    const error = new Error("DB9 cleanup record failed integrity verification");
+    error.code = "DB9_CLEANUP_INTEGRITY_FAILURE";
+    throw error;
   }
   let values;
   try {
@@ -560,7 +562,13 @@ async function cleanupDatabase(options = {}) {
     }
     record = readCleanupRecord(accessToken, savedAnonymousSecret);
   } catch (error) {
-    github.warning(`DB9 cleanup skipped: ${error.message}`);
+    if (error.code === "DB9_CLEANUP_INTEGRITY_FAILURE") {
+      const message = "DB9_CLEANUP_INTEGRITY_FAILURE: Cleanup record signature verification failed; cleanup skipped without making API requests.";
+      github.error(message);
+      github.appendSummary(`### DB9 cleanup security event\n\n${message}\n`);
+    } else {
+      github.warning(`DB9 cleanup skipped: ${error.message}`);
+    }
     return;
   }
   const created = readCleanupState(record, "created");
