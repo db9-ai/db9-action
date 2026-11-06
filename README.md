@@ -74,6 +74,10 @@ already know the DB9 database ID. Branch mode waits for the branch to become
 
 Create one database per matrix entry or test worker:
 
+Generated names longer than 63 characters include a hash of the full repository,
+run, attempt, prefix, and worker identity so truncation does not discard the
+differences between jobs. Short generated names keep their existing format.
+
 ```yaml
 strategy:
   matrix:
@@ -162,6 +166,9 @@ the database after the workflow finishes.
 
 Post cleanup requires the signed v2 record saved by the main step. If the record
 is missing, uses an older format, or fails verification, deletion is skipped.
+The record must contain a non-empty string database ID; cleanup never falls back
+to deleting by name. A create or branch response without a valid database ID
+fails the main step before polling or connecting by name.
 
 `cleanup: false` means db9-action will not delete the database. DB9
 documentation does not specify an automatic retention period for anonymous

@@ -100,6 +100,29 @@ test("generateDatabaseName supports prefixes and worker IDs", () => {
   assert.equal(name, "ci-example-app-12345-2-node-24");
 });
 
+test("long generated names keep distinct run, attempt, worker, repository, and prefix identities", () => {
+  const env = {
+    GITHUB_REPOSITORY: `db9-ai/${"example".repeat(12)}`,
+    GITHUB_RUN_ID: "12345",
+    GITHUB_RUN_ATTEMPT: "1",
+  };
+  const options = { prefix: "ci".repeat(40), workerId: "worker".repeat(15) };
+  const names = [
+    generateDatabaseName(env, options),
+    generateDatabaseName({ ...env, GITHUB_RUN_ID: "12346" }, options),
+    generateDatabaseName({ ...env, GITHUB_RUN_ATTEMPT: "2" }, options),
+    generateDatabaseName(env, { ...options, workerId: `${options.workerId}-2` }),
+    generateDatabaseName({ ...env, GITHUB_REPOSITORY: `${env.GITHUB_REPOSITORY}-2` }, options),
+    generateDatabaseName(env, { ...options, prefix: `${options.prefix}-2` }),
+  ];
+  assert.equal(new Set(names).size, names.length);
+  assert.equal(generateDatabaseName(env, options), names[0]);
+  for (const name of names) {
+    assert.ok(name.length <= 63);
+    assert.match(name, /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+  }
+});
+
 test("apiUrl joins base URL and path", () => {
   assert.equal(apiUrl("https://api.db9.ai/", "/customer/databases"), "https://api.db9.ai/customer/databases");
 });
@@ -288,6 +311,36 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
     assert.deepEqual(cleanupCalls.map((call) => call.key), ["DELETE /customer/databases/db_123"]);
     assert.equal(cleanupCalls[0].headers.Authorization, "Bearer api-key");
   });
+});
+
+test("runMain rejects missing or invalid created IDs before polling or connecting by name", async () => {
+  for (const mode of ["database", "branch"]) {
+    for (const databaseId of [undefined, null, "", "   ", 123, {}]) {
+      await withGithubFiles(async () => {
+        process.env["INPUT_DB9-API-KEY"] = "api-key";
+        process.env.INPUT_MODE = mode;
+        process.env["INPUT_PROJECT-ID"] = "project-1";
+        process.env["INPUT_SOURCE-DATABASE-ID"] = "db_source";
+        process.env["INPUT_DATABASE-NAME"] = "shared-name";
+        const calls = [];
+        const createPath = mode === "branch"
+          ? "POST /customer/databases/db_source/branch"
+          : "POST /customer/databases";
+        const fetchImpl = mockFetch({
+          "GET /customer/databases?all=true&project_id=project-1": {
+            body: [{ id: "db_source", name: "staging", project_id: "project-1" }],
+          },
+          [createPath]: { body: { id: databaseId, name: "shared-name", state: "CREATING" } },
+        }, calls);
+
+        await assert.rejects(() => runMain({ fetchImpl, pollIntervalMs: 1 }), /missing a database ID/);
+        assert.deepEqual(calls.map((call) => call.key), mode === "branch"
+          ? ["GET /customer/databases?all=true&project_id=project-1", createPath]
+          : [createPath]);
+        assert.ok(!fs.existsSync(process.env.GITHUB_STATE));
+      });
+    }
+  }
 });
 
 test("runMain creates a branch and waits until ACTIVE", async () => {
@@ -551,6 +604,7 @@ test("cleanupDatabase deletes the recorded database through the DB9 API", async 
       created: "true",
       cleanup: "true",
       "database-id": "db_123",
+      "database-name": "shared-name",
       "api-url": "https://api.db9.ai",
     });
 
@@ -570,6 +624,24 @@ test("cleanupDatabase deletes the recorded database through the DB9 API", async 
     assert.deepEqual(calls.map((call) => call.key), ["DELETE /customer/databases/db_123"]);
     assert.equal(calls[0].headers.Authorization, "Bearer anon-token");
   });
+});
+
+test("cleanupDatabase never falls back to a name for missing or invalid signed IDs", async () => {
+  for (const databaseId of [undefined, null, "", "   ", 123, {}, [], true]) {
+    await withGithubFiles(async () => {
+      process.env["STATE_access-token"] = "anon-token";
+      process.env["STATE_cleanup-record"] = signedCleanupRecord({
+        created: "true",
+        cleanup: "true",
+        "database-id": databaseId,
+        "database-name": "another-jobs-live-database",
+        "api-url": "https://api.db9.ai",
+      });
+      const calls = [];
+      await cleanupDatabase({ fetchImpl: mockFetch({}, calls) });
+      assert.deepEqual(calls, []);
+    });
+  }
 });
 
 test("cleanupDatabase uses the signed cleanup record instead of modified individual state", async () => {
