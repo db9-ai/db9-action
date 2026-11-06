@@ -64,6 +64,13 @@ function generateDatabaseName(env = process.env, options = {}) {
   const worker = options.workerId ? `-${sanitizeDatabaseName(options.workerId, "worker")}` : "";
   const base = `${prefix}-${repo}-${run}-${attempt}${worker}`;
   const sanitized = sanitizeDatabaseName(base);
+  if (base.length > 63) {
+    const identity = JSON.stringify([
+      options.prefix || "gha", env.GITHUB_REPOSITORY || "repo", run, attempt, options.workerId || "",
+    ]);
+    const suffix = crypto.createHash("sha256").update(identity).digest("hex").slice(0, 16);
+    return `${sanitized.slice(0, 46).replace(/-$/g, "")}-${suffix}`;
+  }
   if (sanitized.length >= 12) {
     return sanitized;
   }
@@ -564,9 +571,9 @@ async function cleanupDatabase(options = {}) {
     apiKey,
     apiUrl: normalizeApiUrl(readCleanupState(record, "api-url")),
   };
-  const target = readCleanupState(record, "database-id") || readCleanupState(record, "database-name");
-  if (!target) {
-    github.warning("DB9 cleanup skipped because no database name or ID was recorded.");
+  const target = record["database-id"];
+  if (typeof target !== "string" || !target.trim()) {
+    github.warning("DB9 cleanup skipped because no valid database ID was recorded.");
     return;
   }
 
@@ -621,6 +628,9 @@ async function runMain(options = {}) {
   }
 
   const created = inputs.mode === "branch" ? await createBranch(inputs, access, options) : await createDatabase(inputs, access, options);
+  if (typeof created.id !== "string" || !created.id.trim()) {
+    throw new Error("DB9 create response is missing a database ID");
+  }
   const shouldWait = inputs.mode === "branch" || (created.state && created.state !== "ACTIVE");
   const database = shouldWait ? await waitForDatabaseActive(inputs, access, created, options) : created;
   saveCleanupState(inputs, access, database);
