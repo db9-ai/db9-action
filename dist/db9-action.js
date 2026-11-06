@@ -162,6 +162,9 @@ function normalizeApiUrl(value) {
   if (parsed.hash) {
     throw new Error("DB9 API URL must not include a fragment");
   }
+  if (candidate.includes("?")) {
+    throw new Error("DB9 API URL must not include a query string");
+  }
   return candidate.replace(/\/+$/g, "");
 }
 

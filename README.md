@@ -193,7 +193,9 @@ and deletes only databases in that project whose names start with `cleanup-prefi
 - The action masks `db9-api-key`, anonymous credentials and account ID, and the
   generated `database-url` in workflow logs. Informational messages suspend runner
   command parsing while displaying API-returned text.
-- `db9-api-url` must use `https`. The action does not follow redirects before sending the API credential.
+- `db9-api-url` must use `https` and must not contain a query string, including
+  an empty `?`. Custom HTTPS hosts and path prefixes remain supported.
+  The action does not follow redirects before sending the API credential.
 - Project restrictions apply to this action. Anyone with the same API key can
   call the API directly and access the projects permitted by that key.
 - API-key mode reads the key again from the action input in the post step instead
