@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
+const github = require("../dist/github");
 const {
   apiUrl,
   buildTemporaryConnectionString,
@@ -311,6 +312,50 @@ test("runMain uses db9-api-key without anonymous registration", async () => {
     assert.deepEqual(cleanupCalls.map((call) => call.key), ["DELETE /customer/databases/db_123"]);
     assert.equal(cleanupCalls[0].headers.Authorization, "Bearer api-key");
   });
+});
+
+test("connection passwords and encoded forms are masked without changing outputs", async (t) => {
+  const secrets = [];
+  t.mock.method(github, "setSecret", (value) => secrets.push(value));
+  t.mock.method(console, "log", () => {});
+  const passwords = [
+    { token: "plain-token", encoded: "plain-token" },
+    { token: "jwt+token=value%2F", encoded: "jwt%2Btoken%3Dvalue%252F" },
+    { token: "p@ss:/?#[]!$&'()*", encoded: "p%40ss%3A%2F%3F%23%5B%5D%21%24%26%27%28%29%2A" },
+    { token: "multi\nline\rpass%", encoded: "multi%0Aline%0Dpass%25" },
+  ];
+  for (const { token, encoded } of passwords) {
+    await withGithubFiles(async () => {
+      process.env["INPUT_DB9-API-KEY"] = "api-key";
+      process.env["INPUT_DATABASE-NAME"] = "ci-db";
+      secrets.length = 0;
+      const calls = [];
+      const fetchImpl = mockFetch({
+        "POST /customer/databases": { body: { id: "db_123", name: "ci-db", state: "ACTIVE" } },
+        "POST /customer/databases/db_123/connect-token": {
+          body: { user: "db_123.admin", token, host: "pg.db9.ai", port: 5433, database: "postgres" },
+        },
+      }, calls);
+
+      await runMain({ fetchImpl });
+
+      const databaseUrl = `postgresql://db_123.admin:${encoded}@pg.db9.ai:5433/postgres`;
+      assert.ok(secrets.includes(token), "raw database password must be masked");
+      assert.ok(secrets.includes(encoded), "encoded database password must be masked");
+      assert.ok(secrets.includes(databaseUrl), "complete database URL must remain masked");
+      const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8").split(/\r?\n/);
+      assert.ok(output.includes(`database-url=${databaseUrl}`));
+      const env = fs.readFileSync(process.env.GITHUB_ENV, "utf8").split(/\r?\n/);
+      assert.ok(env.includes(`DATABASE_URL=${databaseUrl}`));
+      assert.ok(env.includes(`DB9_DATABASE_URL=${databaseUrl}`));
+      assert.deepEqual(calls.map((call) => call.key), [
+        "POST /customer/databases", "POST /customer/databases/db_123/connect-token",
+      ]);
+      assert.deepEqual(calls[0].body, { name: "ci-db" });
+      assert.deepEqual(calls[1].body, { role: "admin" });
+      assert.equal(calls[1].headers.Authorization, "Bearer api-key");
+    });
+  }
 });
 
 test("runMain rejects missing or invalid created IDs before polling or connecting by name", async () => {
