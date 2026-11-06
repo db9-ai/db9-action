@@ -34,10 +34,35 @@ jobs:
           ].join("\n"));
           github.setOutput("after-info", "processed");
           NODE
+      - name: Verify cleanup integrity alerts preserve runner results
+        id: integrity-alert
+        run: |
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+          const fs = require("node:fs");
+          const github = require("./dist/github");
+          const { cleanupDatabase } = require("./dist/db9-action");
+          process.env["INPUT_DB9-API-KEY"] = "integrity-check-fixture";
+          process.env["STATE_cleanup-record"] = "v2.e30.invalid-signature";
+          let requests = 0;
+          global.fetch = async () => {
+            requests += 1;
+            throw new Error("Unexpected API request");
+          };
+          (async () => {
+            await cleanupDatabase();
+            assert.equal(requests, 0);
+            assert.equal(process.exitCode, undefined);
+            assert.match(fs.readFileSync(process.env.GITHUB_STEP_SUMMARY, "utf8"), /DB9_CLEANUP_INTEGRITY_FAILURE/);
+            github.setOutput("after-alert", "processed");
+          })().catch((error) => github.setFailed(error));
+          NODE
       - name: Check runner command results
         env:
           COMMAND_CHECK: ${{ steps.log-safety.outputs.command-check }}
           AFTER_INFO: ${{ steps.log-safety.outputs.after-info }}
+          AFTER_ALERT: ${{ steps.integrity-alert.outputs.after-alert }}
         run: |
           test "$COMMAND_CHECK" = unchanged
           test "$AFTER_INFO" = processed
+          test "$AFTER_ALERT" = processed

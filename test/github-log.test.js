@@ -31,3 +31,14 @@ test("info never resumes with a marker present in the untrusted message", (t) =>
   assert.equal(lines[0], "::stop-commands::fresh-marker");
   assert.equal(lines[2], "::fresh-marker::");
 });
+
+test("error annotations escape command data without changing the exit code", (t) => {
+  const lines = [];
+  t.mock.method(console, "log", (line) => lines.push(line));
+  const previousExitCode = process.exitCode;
+
+  github.error("event%value\r\n::set-output name=command-check::modified");
+
+  assert.deepEqual(lines, ["::error::event%25value%0D%0A::set-output name=command-check::modified"]);
+  assert.equal(process.exitCode, previousExitCode);
+});

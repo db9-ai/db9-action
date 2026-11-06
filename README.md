@@ -173,6 +173,13 @@ The record must contain a non-empty string database ID; cleanup never falls back
 to deleting by name. A create or branch response without a valid database ID
 fails the main step before polling or connecting by name.
 
+An HMAC signature mismatch emits the fixed `DB9_CLEANUP_INTEGRITY_FAILURE`
+error annotation and, when `GITHUB_STEP_SUMMARY` is available, appends a fixed
+security event summary without credentials or unverified state. Cleanup makes
+no API requests on this path. The annotation and summary do not change the post
+step's exit code; a missing or unwritable summary does not fail the step.
+These records use GitHub's normal access controls and retention.
+
 `cleanup: false` means db9-action will not delete the database. DB9
 documentation does not specify an automatic retention period for anonymous
 databases. Anonymous databases count toward the 5-database anonymous account
