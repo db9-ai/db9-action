@@ -405,6 +405,8 @@ async function connectDatabase(inputs, access, database, options = {}) {
       fetchImpl: options.fetchImpl,
     });
     const databaseUrl = buildTemporaryConnectionString(data);
+    github.setSecret(data.token);
+    github.setSecret(encodeUriComponentStrict(data.token));
     github.setSecret(databaseUrl);
     return {
       databaseUrl,
