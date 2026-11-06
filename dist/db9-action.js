@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const net = require("net");
 
 const github = require("./github");
 
@@ -83,11 +84,31 @@ function encodeUriComponentStrict(value) {
   );
 }
 
+function isValidConnectionHost(host) {
+  if (host.startsWith("[") && host.endsWith("]")) {
+    const address = host.slice(1, -1);
+    return /^[0-9a-f:.]+$/i.test(address) && net.isIP(address) === 6;
+  }
+  if (net.isIP(host) === 4) {
+    return true;
+  }
+  const hostname = host.endsWith(".") ? host.slice(0, -1) : host;
+  if (hostname.length > 253 || /[^a-z0-9.-]/i.test(hostname) || /^[0-9.]+$/.test(hostname)) {
+    return false;
+  }
+  return hostname.split(".").every((label) =>
+    label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label),
+  );
+}
+
 function buildTemporaryConnectionString(info) {
   for (const key of ["user", "token", "host"]) {
     if (!info[key] || typeof info[key] !== "string") {
       throw new Error(`Invalid DB9 connect-token response: missing ${key}`);
     }
+  }
+  if (!isValidConnectionHost(info.host)) {
+    throw new Error("Invalid DB9 connect-token response: invalid host");
   }
   const port = Number(info.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
