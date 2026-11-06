@@ -205,3 +205,8 @@ and deletes only databases in that project whose names start with `cleanup-prefi
 - The exported connection URL is temporary because it uses a DB9 connect token.
   Prefer passing it through GitHub Actions environment variables or outputs
   instead of printing it.
+- The connect-token response host must be a single ASCII DNS hostname, IPv4
+  address, or bracketed IPv6 address. URI delimiters, control characters, host
+  lists, and IPv6 zone identifiers are rejected before exporting the URL.
+  Valid hosts are preserved as returned. This syntax check does not enforce
+  TLS or verify the identity of the database server.
