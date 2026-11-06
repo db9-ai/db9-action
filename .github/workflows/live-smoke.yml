@@ -25,11 +25,16 @@ jobs:
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select 1 as db9_action_smoke"
 
       - name: Show database metadata
+        env:
+          DB9_DATABASE_ID: ${{ steps.db9.outputs.database-id }}
+          DB9_DATABASE_NAME: ${{ steps.db9.outputs.database-name }}
+          DB9_DATABASE_STATE: ${{ steps.db9.outputs.database-state }}
+          DB9_EXPIRES_AT: ${{ steps.db9.outputs.expires-at }}
         run: |
-          echo "database-id=${{ steps.db9.outputs.database-id }}"
-          echo "database-name=${{ steps.db9.outputs.database-name }}"
-          echo "database-state=${{ steps.db9.outputs.database-state }}"
-          echo "expires-at=${{ steps.db9.outputs.expires-at }}"
+          echo "database-id=$DB9_DATABASE_ID"
+          echo "database-name=$DB9_DATABASE_NAME"
+          echo "database-state=$DB9_DATABASE_STATE"
+          echo "expires-at=$DB9_EXPIRES_AT"
 
   published-action:
     name: Published action anonymous database
@@ -47,8 +52,13 @@ jobs:
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "select 1 as db9_action_published_smoke"
 
       - name: Show database metadata
+        env:
+          DB9_DATABASE_ID: ${{ steps.db9.outputs.database-id }}
+          DB9_DATABASE_NAME: ${{ steps.db9.outputs.database-name }}
+          DB9_DATABASE_STATE: ${{ steps.db9.outputs.database-state }}
+          DB9_EXPIRES_AT: ${{ steps.db9.outputs.expires-at }}
         run: |
-          echo "database-id=${{ steps.db9.outputs.database-id }}"
-          echo "database-name=${{ steps.db9.outputs.database-name }}"
-          echo "database-state=${{ steps.db9.outputs.database-state }}"
-          echo "expires-at=${{ steps.db9.outputs.expires-at }}"
+          echo "database-id=$DB9_DATABASE_ID"
+          echo "database-name=$DB9_DATABASE_NAME"
+          echo "database-state=$DB9_DATABASE_STATE"
+          echo "expires-at=$DB9_EXPIRES_AT"

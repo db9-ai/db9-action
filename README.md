@@ -31,10 +31,13 @@ jobs:
       - run: psql "$DATABASE_URL" -c "select 1"
 ```
 
-The same connection URL is also available as an action output:
+The same connection URL is also available as an action output. Pass it through a
+step environment variable when using it in a shell command:
 
 ```yaml
-- run: psql "${{ steps.db9.outputs.database-url }}" -c "select 1"
+- run: psql "$DATABASE_URL" -c "select 1"
+  env:
+    DATABASE_URL: ${{ steps.db9.outputs.database-url }}
 ```
 
 ### Authenticated project database
