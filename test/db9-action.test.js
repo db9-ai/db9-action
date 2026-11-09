@@ -136,7 +136,7 @@ test("buildTemporaryConnectionString percent-encodes user info", () => {
     port: 5433,
     database: "postgres",
   });
-  assert.equal(dsn, "postgresql://tenant.admin:jwt%2Btoken%3Dvalue@pg.db9.ai:5433/postgres");
+  assert.equal(dsn, "postgresql://tenant.admin:jwt%2Btoken%3Dvalue@pg.db9.ai:5433/postgres?sslmode=require");
 });
 
 test("requestJson reports API errors", async () => {
@@ -206,12 +206,12 @@ test("runMain creates an anonymous database through the DB9 API", async (t) => {
     assert.deepEqual(calls[1].body, { name: "ci-db" });
 
     const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8");
-    assert.match(output, /database-url=postgresql:\/\/db_123.admin:connect-token@pg.db9.ai:5433\/postgres/);
+    assert.match(output, /^database-url=postgresql:\/\/db_123.admin:connect-token@pg.db9.ai:5433\/postgres\?sslmode=require$/m);
     assert.match(output, /database-id=db_123/);
     assert.match(output, /expires-at=2026-07-04T03:30:00Z/);
 
     const env = fs.readFileSync(process.env.GITHUB_ENV, "utf8");
-    assert.match(env, /DATABASE_URL=postgresql:\/\/db_123.admin:connect-token@pg.db9.ai:5433\/postgres/);
+    assert.match(env, /^DATABASE_URL=postgresql:\/\/db_123.admin:connect-token@pg.db9.ai:5433\/postgres\?sslmode=require$/m);
 
     const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
     assert.match(state, /access-token=anon-token/);
@@ -339,7 +339,7 @@ test("connection passwords and encoded forms are masked without changing outputs
 
       await runMain({ fetchImpl });
 
-      const databaseUrl = `postgresql://db_123.admin:${encoded}@pg.db9.ai:5433/postgres`;
+      const databaseUrl = `postgresql://db_123.admin:${encoded}@pg.db9.ai:5433/postgres?sslmode=require`;
       assert.ok(secrets.includes(token), "raw database password must be masked");
       assert.ok(secrets.includes(encoded), "encoded database password must be masked");
       assert.ok(secrets.includes(databaseUrl), "complete database URL must remain masked");

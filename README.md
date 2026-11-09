@@ -207,8 +207,15 @@ and deletes only databases in that project whose names start with `cleanup-prefi
 - The exported connection URL is temporary because it uses a DB9 connect token.
   Prefer passing it through GitHub Actions environment variables or outputs
   instead of printing it.
+- Generated connection URLs include `sslmode=require`. With `psql`/libpq, this
+  requires encryption and fails if the server cannot negotiate TLS instead of
+  falling back to plaintext. It does not verify the server hostname; without a
+  configured root CA file, it does not verify the certificate chain either.
+  An active network attacker can still impersonate the database server.
+  Other drivers can interpret TLS parameters differently; check the TLS and
+  certificate validation behavior of the client consuming the URL.
 - The connect-token response host must be a single ASCII DNS hostname, IPv4
   address, or bracketed IPv6 address. URI delimiters, control characters, host
   lists, and IPv6 zone identifiers are rejected before exporting the URL.
-  Valid hosts are preserved as returned. This syntax check does not enforce
-  TLS or verify the identity of the database server.
+  Valid hosts are preserved as returned. This syntax check does not verify
+  the identity of the database server.
