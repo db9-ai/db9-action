@@ -80,9 +80,9 @@ const invalidHosts = [
 test("connect-token hosts preserve valid DNS names, IPv4, and bracketed IPv6 exactly", () => {
   for (const host of validHosts) {
     const dsn = buildTemporaryConnectionString({ ...connection, host });
-    assert.equal(dsn, `postgresql://db.admin:password%2Bvalue@${host}:5433/postgres`);
+    assert.equal(dsn, `postgresql://db.admin:password%2Bvalue@${host}:5433/postgres?sslmode=require`);
     const parsed = new URL(dsn);
-    assert.equal(parsed.search, "");
+    assert.deepEqual([...parsed.searchParams], [["sslmode", "require"]]);
     assert.equal(parsed.hash, "");
     assert.equal(parsed.port, "5433");
   }
@@ -107,8 +107,89 @@ test("host validation retains missing-field and port errors without reflecting r
   }
   assert.equal(
     buildTemporaryConnectionString({ user: "user@tenant", token: "pass/?#", host: "[::1]", port: "5433", database: "db/name" }),
-    "postgresql://user%40tenant:pass%2F%3F%23@[::1]:5433/db%2Fname",
+    "postgresql://user%40tenant:pass%2F%3F%23@[::1]:5433/db%2Fname?sslmode=require",
   );
+});
+
+test("connection URLs require TLS independently of response hints and database names", () => {
+  for (const tls of [undefined, "required", "not_enforced"]) {
+    for (const database of [undefined, "", "db?sslmode=disable&host=attacker.example"]) {
+      const parsed = new URL(buildTemporaryConnectionString({ ...connection, host: "pg.db9.ai", tls, database }));
+      assert.deepEqual([...parsed.searchParams], [["sslmode", "require"]]);
+      assert.equal(decodeURIComponent(parsed.pathname.slice(1)), database || "postgres");
+    }
+  }
+});
+
+test("TLS-required URLs stay identical across outputs and optional environments", async (context) => {
+  context.mock.method(console, "log", () => {});
+  for (const anonymous of [false, true]) {
+    for (const mode of ["database", "branch"]) {
+      for (const exportEnv of [false, true]) {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "db9-connect-tls-"));
+        const previous = { ...process.env };
+        const calls = [];
+        try {
+          for (const name of Object.keys(process.env)) {
+            if (/^(INPUT_|STATE_|GITHUB_)/.test(name) || name === "DATABASE_URL" || name === "DB9_DATABASE_URL") {
+              delete process.env[name];
+            }
+          }
+          process.env.GITHUB_OUTPUT = path.join(directory, "output");
+          process.env.GITHUB_ENV = path.join(directory, "env");
+          process.env.GITHUB_STATE = path.join(directory, "state");
+          process.env.INPUT_MODE = mode;
+          process.env["INPUT_DATABASE-NAME"] = "tls-check";
+          process.env["INPUT_EXPORT-ENV"] = String(exportEnv);
+          process.env["INPUT_PROJECT-ID"] = "project-fixture";
+          process.env["INPUT_SOURCE-DATABASE-ID"] = "db_source";
+          if (!anonymous) {
+            process.env["INPUT_DB9-API-KEY"] = "account-key";
+          }
+          const routes = {
+            "POST /customer/anonymous-register": { token: "anon-token", anonymous_id: "anon-id", anonymous_secret: "anon-secret" },
+            "GET /customer/databases": [{ id: "db_source", project_id: "project-fixture" }],
+            "POST /customer/databases": { id: "db_created", name: "tls-check", state: "ACTIVE" },
+            "POST /customer/databases/db_source/branch": { id: "db_created", name: "tls-check", state: "ACTIVE" },
+            "POST /customer/databases/db_created/connect-token": { ...connection, host: "pg.db9.ai", tls: "not_enforced" },
+            "DELETE /customer/databases/db_created": {},
+          };
+          const fetchImpl = async (url, options) => {
+            const key = `${options.method} ${new URL(url).pathname}`;
+            calls.push(key);
+            assert.ok(Object.hasOwn(routes, key), key);
+            return new Response(JSON.stringify(routes[key]), { status: 200 });
+          };
+          await runMain({ fetchImpl });
+          const expected = "postgresql://db.admin:password%2Bvalue@pg.db9.ai:5433/postgres?sslmode=require";
+          const output = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8").split(/\r?\n/);
+          assert.ok(output.includes(`database-url=${expected}`));
+          if (exportEnv) {
+            const env = fs.readFileSync(process.env.GITHUB_ENV, "utf8").split(/\r?\n/);
+            assert.ok(env.includes(`DATABASE_URL=${expected}`));
+            assert.ok(env.includes(`DB9_DATABASE_URL=${expected}`));
+            assert.equal(process.env.DATABASE_URL, expected);
+            assert.equal(process.env.DB9_DATABASE_URL, expected);
+          } else {
+            assert.ok(!fs.existsSync(process.env.GITHUB_ENV));
+            assert.equal(process.env.DATABASE_URL, undefined);
+            assert.equal(process.env.DB9_DATABASE_URL, undefined);
+          }
+          const state = fs.readFileSync(process.env.GITHUB_STATE, "utf8");
+          for (const entry of state.trimEnd().split(/\r?\n/)) {
+            const separator = entry.indexOf("=");
+            process.env[`STATE_${entry.slice(0, separator)}`] = entry.slice(separator + 1);
+          }
+          const beforeCleanup = calls.length;
+          await cleanupDatabase({ fetchImpl });
+          assert.deepEqual(calls.slice(beforeCleanup), ["DELETE /customer/databases/db_created"]);
+        } finally {
+          process.env = previous;
+          fs.rmSync(directory, { recursive: true, force: true });
+        }
+      }
+    }
+  }
 });
 
 test("invalid connect hosts fail before publishing outputs while preserving post cleanup", async (context) => {

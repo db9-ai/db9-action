@@ -115,7 +115,7 @@ function buildTemporaryConnectionString(info) {
     throw new Error("Invalid DB9 connect-token response: missing or invalid port");
   }
   const database = typeof info.database === "string" && info.database ? info.database : "postgres";
-  return `postgresql://${encodeUriComponentStrict(info.user)}:${encodeUriComponentStrict(info.token)}@${info.host}:${port}/${encodeUriComponentStrict(database)}`;
+  return `postgresql://${encodeUriComponentStrict(info.user)}:${encodeUriComponentStrict(info.token)}@${info.host}:${port}/${encodeUriComponentStrict(database)}?sslmode=require`;
 }
 
 function readInputs() {
