@@ -10,7 +10,7 @@ test("inputs ignore underscore aliases for hyphenated names", (t) => {
     process.env = previous;
   });
 
-  for (const name of ["db9-api-url", "source-database-id", "cleanup-prefix", "export-env"]) {
+  for (const name of ["db9-api-url", "source-database-id", "database-name-prefix", "export-env"]) {
     delete process.env[`INPUT_${name.toUpperCase()}`];
     process.env[`INPUT_${name.replace(/-/g, "_").toUpperCase()}`] = "injected";
     assert.equal(github.getInput(name), "");

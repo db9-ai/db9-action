@@ -8,7 +8,7 @@ branding:
 
 inputs:
   mode:
-    description: Operation to run. Use database for an empty ephemeral database, branch to clone from an existing database, or cleanup to delete stale CI databases by prefix.
+    description: Operation to run. Use database for an empty ephemeral database or branch to clone from an existing database.
     required: false
     default: database
   database-name:
@@ -25,7 +25,7 @@ inputs:
     description: DB9 region to create the database in.
     required: false
   project-id:
-    description: DB9 project ID. Required for branch and cleanup modes; only databases in this project are used.
+    description: DB9 project ID. Required for branch mode; the source database must belong to this project.
     required: false
   database-user:
     description: Database user to request in the temporary connection URL.
@@ -52,9 +52,6 @@ inputs:
     description: Seconds between database status polls while waiting.
     required: false
     default: "2"
-  cleanup-prefix:
-    description: Database name prefix to delete in cleanup mode.
-    required: false
   db9-api-key:
     description: DB9 API key. Omit this input to use anonymous DB9 provisioning.
     required: false
@@ -84,8 +81,6 @@ outputs:
     description: Expiration timestamp for the temporary connection URL, when returned by the DB9 API.
   database-state:
     description: Final state observed for the created DB9 database or branch.
-  cleanup-count:
-    description: Number of databases deleted in cleanup mode.
 
 runs:
   using: "node24"
