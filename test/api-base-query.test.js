@@ -92,7 +92,7 @@ test("query-free HTTPS bases preserve custom hosts, prefixes, and request querie
 test("main rejects API base queries in every mode before requests or publishing state", async (context) => {
   context.mock.method(github, "setSecret", () => {});
   for (const anonymous of [false, true]) {
-    for (const mode of ["database", "branch", "cleanup"]) {
+    for (const mode of ["database", "branch"]) {
       for (const base of invalidBases) {
         await withEnvironment(anonymous, async (directory) => {
           process.env.INPUT_MODE = mode;

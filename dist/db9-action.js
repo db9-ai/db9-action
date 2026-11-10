@@ -28,21 +28,15 @@ function sanitizeDatabaseName(value, fallback = "gha-db9") {
   return name.slice(0, 63).replace(/-$/g, "") || fallback;
 }
 
-function sanitizeDatabasePrefix(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+/g, "")
-    .slice(0, 63);
-}
-
 function sanitizeMode(value) {
   const mode = String(value || "database").trim().toLowerCase();
-  if (["database", "branch", "cleanup"].includes(mode)) {
+  if (mode === "cleanup") {
+    throw new Error("Prefix-based cleanup mode has been removed. Use database or branch; post-step cleanup is still available.");
+  }
+  if (["database", "branch"].includes(mode)) {
     return mode;
   }
-  throw new Error(`Input mode must be database, branch, or cleanup; got: ${value}`);
+  throw new Error(`Input mode must be database or branch; got: ${value}`);
 }
 
 function parsePositiveInteger(value, fallback, inputName) {
@@ -127,7 +121,6 @@ function readInputs() {
     apiKey,
     apiUrl: normalizeApiUrl(github.getInput("db9-api-url")),
     cleanup: github.getBooleanInput("cleanup", true),
-    cleanupPrefix: github.getInput("cleanup-prefix"),
     databaseName: github.getInput("database-name"),
     databaseNamePrefix: github.getInput("database-name-prefix") || "gha",
     databaseUser: github.getInput("database-user") || "admin",
@@ -458,42 +451,6 @@ function writeOutputs(inputs, database, connection) {
   }
 }
 
-async function cleanupByPrefix(inputs, access, options = {}) {
-  if (!inputs.projectId) {
-    throw new Error("cleanup mode requires project-id");
-  }
-  const prefix = inputs.cleanupPrefix;
-  const sanitizedPrefix = sanitizeDatabasePrefix(prefix);
-  if (!sanitizedPrefix || sanitizedPrefix.length < 3) {
-    throw new Error("cleanup mode requires cleanup-prefix with at least 3 safe characters");
-  }
-  if (!inputs.apiKey) {
-    throw new Error("cleanup mode requires db9-api-key");
-  }
-
-  github.startGroup("Delete stale DB9 databases");
-  try {
-    const databases = await listDatabases(inputs, access, options);
-    const targets = databases.filter((database) =>
-      database &&
-      database.project_id === inputs.projectId &&
-      typeof database.name === "string" &&
-      database.name.startsWith(sanitizedPrefix),
-    );
-    if (targets.some((database) => typeof database.id !== "string" || !database.id)) {
-      throw new Error("DB9 cleanup target is missing a database ID");
-    }
-    for (const database of targets) {
-      await deleteDatabase(inputs, access.token, database.id, options);
-      github.info(`Deleted DB9 database ${database.name}.`);
-    }
-    github.setOutput("cleanup-count", String(targets.length));
-    return targets.length;
-  } finally {
-    github.endGroup();
-  }
-}
-
 function saveCleanupState(inputs, access, database) {
   const values = {
     created: "true",
@@ -648,18 +605,7 @@ async function runMain(options = {}) {
   if (inputs.mode === "branch" && !inputs.projectId) {
     throw new Error("branch mode requires project-id");
   }
-  if (inputs.mode === "cleanup" && !inputs.projectId) {
-    throw new Error("cleanup mode requires project-id");
-  }
-  if (inputs.mode === "cleanup" && !inputs.apiKey) {
-    throw new Error("cleanup mode requires db9-api-key");
-  }
   const access = await getAccess(inputs, options);
-  if (inputs.mode === "cleanup") {
-    const count = await cleanupByPrefix(inputs, access, options);
-    github.info(`Deleted ${count} DB9 database(s).`);
-    return;
-  }
 
   const created = inputs.mode === "branch" ? await createBranch(inputs, access, options) : await createDatabase(inputs, access, options);
   if (typeof created.id !== "string" || !created.id.trim()) {
@@ -681,7 +627,6 @@ module.exports = {
   buildTemporaryConnectionString,
   cleanupDatabase,
   connectDatabase,
-  cleanupByPrefix,
   createDatabase,
   createBranch,
   deleteDatabase,
@@ -696,7 +641,6 @@ module.exports = {
   resolveSourceDatabase,
   runMain,
   sanitizeDatabaseName,
-  sanitizeDatabasePrefix,
   normalizeApiUrl,
   sanitizeMode,
   waitForDatabaseActive,

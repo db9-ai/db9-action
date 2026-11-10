@@ -98,41 +98,16 @@ steps:
       DATABASE_URL: ${{ steps.db9.outputs.database-url }}
 ```
 
-### Scheduled cleanup fallback
-
-The post step deletes the database created by the current job. If a workflow can
-be cancelled before post steps run, add a scheduled fallback cleanup with an API
-key:
-
-```yaml
-name: DB9 Cleanup
-
-on:
-  schedule:
-    - cron: "0 */6 * * *"
-
-jobs:
-  cleanup:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: db9-ai/db9-action@v1
-        with:
-          mode: cleanup
-          db9-api-key: ${{ secrets.DB9_API_KEY }}
-          project-id: ${{ vars.DB9_PROJECT_ID }}
-          cleanup-prefix: ci-
-```
-
 ## Inputs
 
 | Input | Default | Description |
 | --- | --- | --- |
-| `mode` | `database` | Operation to run: `database`, `branch`, or `cleanup`. |
+| `mode` | `database` | Operation to run: `database` or `branch`. |
 | `database-name` | generated | Name for the DB9 database or branch. |
 | `database-name-prefix` | `gha` | Prefix used when generating a database name. |
 | `worker-id` | unset | Optional worker or matrix identifier appended to generated database names. |
 | `region` | DB9 default | DB9 region to create the database in. |
-| `project-id` | DB9 default | DB9 project ID. Required for branch and cleanup modes, which only use databases in the specified project. |
+| `project-id` | DB9 default | DB9 project ID. Required for branch mode; the source database must belong to this project. |
 | `database-user` | `admin` | Database user to request in the temporary connection URL. |
 | `source-database-id` | unset | Source DB9 database ID for `branch` mode. |
 | `source-database-name` | unset | Source DB9 database name for `branch` mode. Used only when `source-database-id` is not set. |
@@ -140,7 +115,6 @@ jobs:
 | `wait` | `true` | Wait for async database operations to become `ACTIVE`. Branch mode waits by default. |
 | `wait-timeout-seconds` | `120` | Maximum seconds to wait for `ACTIVE`. |
 | `wait-interval-seconds` | `2` | Seconds between status polls while waiting. |
-| `cleanup-prefix` | unset | Database name prefix to delete in `cleanup` mode. Required for cleanup mode. |
 | `db9-api-key` | unset | DB9 API key. Omit for anonymous provisioning. |
 | `db9-api-url` | `https://api.db9.ai` | DB9 API base URL. |
 | `cleanup` | `true` | Delete the created database in the post step. |
@@ -156,7 +130,6 @@ jobs:
 | `database-user` | Database user used for the temporary connection URL. |
 | `expires-at` | Expiration timestamp for the temporary connection URL, when returned by the DB9 API. |
 | `database-state` | Final state observed for the created DB9 database or branch. |
-| `cleanup-count` | Number of databases deleted in `cleanup` mode. |
 
 ## Cleanup
 
@@ -185,8 +158,15 @@ documentation does not specify an automatic retention period for anonymous
 databases. Anonymous databases count toward the 5-database anonymous account
 limit, and the temporary connection URL expires independently.
 
-`mode: cleanup` is separate from the post step cleanup. It requires `project-id`
-and deletes only databases in that project whose names start with `cleanup-prefix`.
+Prefix-based bulk deletion has been removed. Remove or disable scheduled
+workflows that use `mode: cleanup`; this mode now fails before making any API
+requests. The `cleanup-prefix` input and `cleanup-count` output are no longer
+available. `database-name-prefix` still controls generated names and does not
+select databases for deletion.
+
+The post step only deletes the database ID recorded by the current action.
+If a job is cancelled before post runs, inspect any remaining databases and
+confirm their ownership and use before deleting them by ID outside this action.
 
 ## Security notes
 
